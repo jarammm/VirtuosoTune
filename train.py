@@ -38,7 +38,6 @@ def get_argument_parser():
   parser.add_argument('--num_iter_per_valid', type=int, default=5000)
 
   parser.add_argument('--model_type', type=str, default='pitch_dur')
-  parser.add_argument('--model_name', type=str, default='pitch_dur')
   parser.add_argument('--save_dir', type=Path, default=Path('experiments/'))
 
   parser.add_argument('--no_log', action='store_true')
@@ -100,8 +99,8 @@ if __name__ == '__main__':
   print(f'Number of train data: {len(trainset)}')
   print(f'Number of valid data: {len(validset)}')
 
-  train_loader = DataLoader(trainset, batch_size=args.batch_size, collate_fn=pack_collate, shuffle=True) #collate_fn=pack_collate)
-  valid_loader = DataLoader(validset, batch_size=args.batch_size, collate_fn=pack_collate, shuffle=False) #collate_fn=pack_collate)
+  train_loader = DataLoader(trainset, batch_size=args.batch_size, collate_fn=pack_collate, shuffle=True)
+  valid_loader = DataLoader(validset, batch_size=args.batch_size, collate_fn=pack_collate, shuffle=False)
 
 
   experiment_name = make_experiment_name_with_date(args, net_param)
