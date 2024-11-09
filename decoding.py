@@ -20,7 +20,7 @@ class MuteWarn:
 
 abcFormat.translate.environLocal.warn = noop
 us=environment.UserSettings()
-us['musescoreDirectPNGPath'] = '/usr/bin/mscore'
+us['musescoreDirectPNGPath'] = '/Applications/MuseScore 3.app/Contents/MacOS/mscore'
 
 os.putenv("QT_QPA_PLATFORM", "offscreen")
 os.putenv("XDG_RUNTIME_DIR", environment.Environment().getRootTempDir())

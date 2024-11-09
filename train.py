@@ -32,7 +32,7 @@ def get_argument_parser():
 
   parser.add_argument('--seed', type=int, default=42)
   parser.add_argument('--num_workers', type=int, default=2)
-  parser.add_argument('--device', type=str, default='cuda')
+  parser.add_argument('--device', type=str, default='cpu')
 
   parser.add_argument('--num_epoch_per_log', type=int, default=2)
   parser.add_argument('--num_iter_per_valid', type=int, default=5000)
