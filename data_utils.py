@@ -334,7 +334,6 @@ class PitchDurSplitSet(ABCset):
     entire_char_list = [splitted for tune in self.data for token in tune for splitted in split_note(token)]
     unique_header_list = self._get_unique_header_tokens()
     unique_char_list = sorted(list(set(entire_char_list)))  + unique_header_list
-    # self.vocab = TokenVocab(vocab_path, unique_char_list)
     self.vocab = getattr(vocab_utils, vocab_name)(vocab_path, unique_char_list)
 
   def __getitem__(self, idx):
