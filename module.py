@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from model_utils import make_higher_node, span_beat_to_note_num
+from model_utils import make_higher_node, span_measure_to_note_num
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, PackedSequence
 
 class MeasureGRU(nn.Module):
@@ -9,25 +9,24 @@ class MeasureGRU(nn.Module):
     self.num_layers = num_layers
     self.hidden_size = hidden_size
     self.attention = ContextAttention(input_size, num_head=num_head)
-    self.rnn = nn.GRU(input_size, hidden_size, num_layers=num_layers, batch_first=True, dropout=dropout)
+    self.measure_rnn = nn.GRU(input_size, hidden_size, num_layers=num_layers, batch_first=True, dropout=dropout)
 
   def forward(self, x, measure_numbers):
     if isinstance(x, PackedSequence):
       padded_x, batch_lens = pad_packed_sequence(x, batch_first=True)
       measure_numbers, _ = pad_packed_sequence(measure_numbers, batch_first=True)
-      measure_nodes = make_higher_node(padded_x, self.attention, measure_numbers, measure_numbers,
-                                        lower_is_note=True)
-      out, hidden = self.rnn(measure_nodes)
-      span_out = span_beat_to_note_num(out, measure_numbers)
+      measure_nodes = make_higher_node(padded_x, self.attention, measure_numbers)
+      out, hidden = self.measure_rnn(measure_nodes)
+      span_out = span_measure_to_note_num(out, measure_numbers)
       packed_out =  pack_padded_sequence(span_out, batch_lens, batch_first=True, enforce_sorted=False)
       assert (packed_out.sorted_indices == x.sorted_indices).all()
       return packed_out
-    else: 
+    else:
       raise NotImplementedError
 
   def one_step(self, x, hidden):
     node = self.attention(x)
-    return self.rnn(node.unsqueeze(1), hidden)
+    return self.measure_rnn(node.unsqueeze(1), hidden)
 
 
 class ContextAttention(nn.Module):

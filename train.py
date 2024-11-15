@@ -56,6 +56,8 @@ if __name__ == '__main__':
   net_param = config.nn_params
   data_param = config.data_params
   model_name = net_param.model_name
+  args.model_name = model_name
+  
   if hasattr(net_param, 'dataset_name'):
     dataset_name = net_param.dataset_name
   elif model_name == "PitchDurModel":

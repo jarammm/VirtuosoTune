@@ -2,7 +2,6 @@ from typing import Union
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence, pack_padded_sequence
-# from transformers import GPT2LMHeadModel
 from module import MeasureGRU, DurPitchDecoder
 
 
@@ -15,7 +14,10 @@ class LanguageModel(nn.Module):
     self.vocab_size_dict = vocab_size
     self.hidden_size = net_param.note.hidden_size
     self._make_embedding_layer()
-    self.rnn = nn.GRU(self.hidden_size, self.hidden_size, num_layers=net_param.note.num_layers, batch_first=True)
+    self.rnn = nn.GRU(self.hidden_size,
+                      self.hidden_size,
+                      num_layers=net_param.note.num_layers,
+                      batch_first=True)
     self._make_projection_layer()
 
   @property
@@ -82,9 +84,12 @@ class LanguageModel(nn.Module):
 
 
 class PitchDurModel(LanguageModel):
-  def __init__(self, vocab_size, nn_param):
-    super().__init__(vocab_size, nn_param)
-    self.rnn = nn.GRU(self.net_param.emb.total_size, self.hidden_size, num_layers=nn_param.note.num_layers, batch_first=True)
+  def __init__(self, vocab_size, net_param):
+    super().__init__(vocab_size, net_param)
+    self.rnn = nn.GRU(self.net_param.emb.total_size,
+                      self.hidden_size,
+                      num_layers=net_param.note.num_layers,
+                      batch_first=True)
 
   def _make_embedding_layer(self):
     self.emb = MultiEmbedding(self.vocab_size_dict, self.net_param)
@@ -98,9 +103,6 @@ class PitchDurModel(LanguageModel):
     else:
       assert input_seq.ndim == 3
       emb = self.emb(input_seq)
-      # main_emb = self.main_emb(input_seq.data[..., 0])
-      # dur_emb = self.dur_emb(input_seq.data[..., 1])
-      # emb = torch.cat([main_emb, dur_emb], dim=-1)
     return emb
   
   def _apply_softmax(self, logit):
@@ -283,16 +285,9 @@ class MultiEmbedding(nn.Module):
     return embedding_sizes
 
 
-
-
 class MeasureHierarchyModel(MeasureInfoModel):
   def __init__(self, vocab_size, net_param):
     super().__init__(vocab_size, net_param)
-    self.rnn = nn.GRU(net_param.emb.total_size, 
-                      net_param.note.hidden_size, 
-                      num_layers=net_param.note.num_layers, 
-                      dropout=net_param.note.dropout,
-                      batch_first=True)
     self.measure_rnn = MeasureGRU(net_param.note.hidden_size, 
                                   net_param.measure.hidden_size,
                                   num_layers=net_param.measure.num_layers, 
@@ -311,17 +306,13 @@ class MeasureHierarchyModel(MeasureInfoModel):
     '''
     if isinstance(input_seq, PackedSequence):
       emb = self._get_embedding(input_seq)
-      hidden, _ = self.rnn(emb)
-      measure_hidden = self.measure_rnn(hidden, measure_numbers)
+      note_hidden, _ = self.rnn(emb)
+      measure_hidden = self.measure_rnn(note_hidden, measure_numbers)
 
-      cat_hidden = PackedSequence(torch.cat([hidden.data, measure_hidden.data], dim=-1), hidden.batch_sizes, hidden.sorted_indices, hidden.unsorted_indices)
-      
-      # pitch_vec = self.time_shifted_pitch_emb(emb)
-      # logit = self.proj(cat_hidden.data, pitch_vec.data) # output: [num_total_notes x vocab_size].
+      cat_hidden = PackedSequence(torch.cat([note_hidden.data, measure_hidden.data], dim=-1), note_hidden.batch_sizes, note_hidden.sorted_indices, note_hidden.unsorted_indices)
       logit = self.proj(cat_hidden.data)
       prob = self._apply_softmax(logit)
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
-
     else:
       pass
 
@@ -332,12 +323,10 @@ class MeasureHierarchyModel(MeasureInfoModel):
     emb = self._get_embedding(selected_token.unsqueeze(0))
     hidden, last_hidden = self.rnn(emb, last_hidden)
     cat_hidden = torch.cat([hidden, last_measure_out], dim=-1)
-    # logit = self.proj(cat_hidden, self.emb.layers[0])
     logit = self.proj(cat_hidden)
     prob = self._apply_softmax(logit)
     selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
 
-    # assert torch.min(torch.abs(last_hidden[-1] - hidden)) < 1e-4
     return selected_token, last_hidden
 
   def _prepare_inference(self, vocab, header, manual_seed):
@@ -397,11 +386,10 @@ class MeasureNoteModel(MeasureHierarchyModel):
   def forward(self, input_seq, measure_numbers):
     if isinstance(input_seq, PackedSequence):
       emb = self._get_embedding(input_seq)
-      hidden, _ = self.rnn(emb)
-      measure_hidden = self.measure_rnn(hidden, measure_numbers)
+      note_hidden, _ = self.rnn(emb)
+      measure_hidden = self.measure_rnn(note_hidden, measure_numbers)
 
-      cat_hidden = PackedSequence(torch.cat([hidden.data, measure_hidden.data], dim=-1), hidden.batch_sizes, hidden.sorted_indices, hidden.unsorted_indices)
-      
+      cat_hidden = PackedSequence(torch.cat([note_hidden.data, measure_hidden.data], dim=-1), note_hidden.batch_sizes, note_hidden.sorted_indices, note_hidden.unsorted_indices)
       final_hidden, _ = self.final_rnn(cat_hidden)
 
       logit = self.proj(final_hidden.data)
@@ -445,7 +433,6 @@ class MeasureNoteModel(MeasureHierarchyModel):
         if selected_token[0,0] == 2: # Generated End token
           break 
         total_out.append(selected_token)
-        # total_probs.append(prob)
 
         measure_sampler.update(selected_token)
         if header['rhythm'] == 'reel':
@@ -497,10 +484,6 @@ class MeasureNotePitchFirstModel(MeasureNoteModel):
 
     converted_out = vocab.convert_inference_token(main_token, dur_token)
     selected_token = torch.tensor(converted_out, dtype=torch.long).to(emb.device).unsqueeze(0)
-    return selected_token, last_hidden, last_final_hidden
-    # return torch.tensor(converted_out, dtype=torch.long).to(emb.device).unsqueeze(0)
-    # prob = self._apply_softmax(logit)
-    selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
     return selected_token, last_hidden, last_final_hidden
 
 
@@ -559,7 +542,6 @@ class MeasureSampler:
     sampled_token_str = self.vocab.vocab['main'][selected_token[0,0].item()]
     if '|' in sampled_token_str:
       if self.cur_m_offset > self.full_measure_duration / 2:
-        # cur_m_index += 1
         self.cur_m_index += 1
         self.measure_number += 1
       self.cur_m_offset = 0
@@ -583,7 +565,6 @@ class MeasureSampler:
       else:
         self.tuplet_count -= 1
         self.tuplet_duration = sampled_dur
-      # print(sampled_token_str, sampled_dur, cur_m_offset)
         if self.tuplet_count == 0:
           self.cur_m_offset += self.tuplet_duration * 2
           self.tuplet_duration = 0
@@ -598,7 +579,6 @@ class MeasureSampler:
 class MeasureGPT(MeasureInfoModel):
   def __init__(self, vocab_size, hidden_size, dropout=0.1):
     super().__init__(vocab_size, hidden_size, dropout)
-    # self.rnn = 
 
 
   def forward(self, input_seq):

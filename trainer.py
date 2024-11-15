@@ -19,34 +19,24 @@ class Trainer:
                      args,
                      ):
     self.model = model
+    self.model.to(args.device)
     self.optimizer = optimizer
     self.scheduler = scheduler
     self.loss_fn = loss_fn
     self.train_loader = train_loader
     self.valid_loader = valid_loader
 
-    save_dir = args.save_dir
-    device = args.device
-    model_name = args.model_name
-    grad_clip = args.grad_clip
-    num_epoch_per_log = args.num_epoch_per_log
-    num_iter_per_valid = args.num_iter_per_valid
-
-
-    self.save_dir = Path(save_dir)
+    self.save_dir = Path(args.save_dir)
+    self.device = args.device
+    self.model_name = args.model_name
+    self.grad_clip = args.grad_clip
+    self.num_epoch_per_log = args.num_epoch_per_log
+    self.num_iter_per_valid = args.num_iter_per_valid
     
-    self.model.to(device)
-    
-    self.grad_clip = grad_clip
     self.best_valid_loss = 100
-    self.device = device
-    
     self.training_loss = []
     self.validation_loss = []
     self.validation_acc = []
-    self.model_name = model_name
-    self.num_epoch_per_log = num_epoch_per_log
-    self.num_iter_per_valid = num_iter_per_valid
 
     self.make_log = not args.no_log
 
@@ -203,8 +193,6 @@ class Trainer:
     else:
       loader = self.valid_loader
       
-    self.model.eval()
-    
     '''
     Write your code from here, using loader, self.model, self.loss_fn.
     '''
