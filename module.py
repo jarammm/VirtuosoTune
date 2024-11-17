@@ -3,7 +3,30 @@ import torch.nn as nn
 from model_utils import make_higher_node, span_measure_to_note_num
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, PackedSequence
 
+
+
 class MeasureGRU(nn.Module):
+  """
+  A GRU-based model for processing sequences at the measure level, 
+  incorporating contextual attention for feature extraction.
+
+  Args:
+      input_size (int): Size of the input feature vectors.
+      hidden_size (int): Size of the GRU hidden state.
+      num_layers (int): Number of GRU layers.
+      num_head (int): Number of attention heads.
+      dropout (float): Dropout rate for the GRU.
+
+  Attributes:
+      attention (ContextAttention): Attention mechanism for extracting measure-level input.
+      measure_rnn (nn.GRU): GRU for processing measure-level nodes.
+
+  Methods:
+      forward(x, measure_numbers):
+          Processes a batch of sequences at the measure level using attention and GRU.
+      one_step(x, hidden):
+          Performs a single forward step for inference.
+  """
   def __init__(self, input_size, hidden_size=128, num_layers=2, num_head=8, dropout=0.1):
     super().__init__()
     self.num_layers = num_layers
@@ -12,12 +35,24 @@ class MeasureGRU(nn.Module):
     self.measure_rnn = nn.GRU(input_size, hidden_size, num_layers=num_layers, batch_first=True, dropout=dropout)
 
   def forward(self, x, measure_numbers):
+    """
+      Forward pass for processing sequences at the measure level.
+
+      Args:
+          x (PackedSequence): Note-level GRU's output(=note hidden) of size `[total_seq_len, embedding_size]`, where:
+              - `total_seq_len` is the total length of all sequences in the batch (sum of sequence lengths).
+              - `embedding_size` is the size of each token's hidden vector.
+          measure_numbers (PackedSequence): Measure number information as a size of [total_seq_len]
+
+      Returns:
+          packed_out (PackedSequence): Processed sequence at the note level, after measure-level aggregation.
+      """
     if isinstance(x, PackedSequence):
       padded_x, batch_lens = pad_packed_sequence(x, batch_first=True)
-      measure_numbers, _ = pad_packed_sequence(measure_numbers, batch_first=True)
-      measure_nodes = make_higher_node(padded_x, self.attention, measure_numbers)
-      out, hidden = self.measure_rnn(measure_nodes)
-      span_out = span_measure_to_note_num(out, measure_numbers)
+      padded_measure_numbers, _ = pad_packed_sequence(measure_numbers, batch_first=True)
+      measure_nodes = make_higher_node(padded_x, self.attention, padded_measure_numbers)
+      out, _ = self.measure_rnn(measure_nodes)
+      span_out = span_measure_to_note_num(out, padded_measure_numbers)
       packed_out =  pack_padded_sequence(span_out, batch_lens, batch_first=True, enforce_sorted=False)
       assert (packed_out.sorted_indices == x.sorted_indices).all()
       return packed_out
@@ -30,6 +65,26 @@ class MeasureGRU(nn.Module):
 
 
 class ContextAttention(nn.Module):
+    """
+    A multi-head attention mechanism for contextual feature extraction.
+
+    Args:
+        size (int): Size of the attention_net.
+        num_head (int): Number of attention heads.
+
+    Attributes:
+        attention_net (nn.Linear): Linear layer for projecting input features.
+        num_head (int): Number of attention heads.
+        head_size (int): Size of each attention head.
+        context_vector (torch.nn.Parameter): Context vector for computing attention weights.
+
+    Methods:
+        get_attention(x):
+            Computes attention weights for the input sequence.
+        forward(x):
+            Applies the attention mechanism to the input sequence and computes the weighted sum.
+    """
+    
     def __init__(self, size, num_head):
         super(ContextAttention, self).__init__()
         self.attention_net = nn.Linear(size, size)

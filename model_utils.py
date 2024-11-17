@@ -3,22 +3,38 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 
-def find_boundaries(diff_boundary, higher_indices, i):
-  '''
-  diff_boundary (torch.Tensor): N x T
-  measure_numbers (torch.Tensor): zero_padded N x T
-  i (int): batch index
-  '''
-  out = [0] + (diff_boundary[diff_boundary[:,0]==i][:,1]+1 ).tolist() + [torch.max(torch.nonzero(higher_indices[i])).item()+1]
+def find_boundaries(diff_boundary, measure_numbers, i):
+  """
+  Finds the boundaries for a specific batch index where a new measure starts.
+
+  Args:
+      diff_boundary (torch.Tensor): A tensor of shape `[total_note_tokens, 2]` where each element contains 
+          the batch index and the last note's offset of a measure.
+      measure_numbers (torch.Tensor): A zero-padded tensor of shape `[batch size, sequence length]` containing measure numbers.
+      i (int): The batch index for which to find boundaries.
+
+  Returns:
+      out (List[int]): A list [start positions of a new measure in a batch],
+          containing lists of positions indicating the start of a new measure for a given batch.
+  """
+  out = [0] + (diff_boundary[diff_boundary[:,0]==i][:,1]+1 ).tolist() + [torch.max(torch.nonzero(measure_numbers[i])).item()+1]
   if out[1] == 0: # if the first boundary occurs in 0, it will be duplicated
     out.pop(0)
   return out
 
+
 def find_boundaries_batch(measure_numbers):
-  '''
-  find all boundaries and then make boundaries list per batch
-  measure_numbers (torch.Tensor): zero_padded N x T
-  '''
+  """
+  Identifies all measure boundaries for each batch.
+
+  Args:
+      measure_numbers (torch.Tensor): A zero-padded tensor of shape `[N, T]`, where `N` is the batch size 
+          and `T` is the sequence length. Each element indicates the measure number.
+          
+  Returns:
+      (List[List[int]]): A list contains `N`(batch size) lists [start positions of a new measure in each batch],
+          where each inner list contains the start positions of new measure for each batch.
+  """
   diff_boundary = torch.nonzero(measure_numbers[:,1:] - measure_numbers[:,:-1]).cpu()
   return [find_boundaries(diff_boundary, measure_numbers, i) for i in range(len(measure_numbers))]
 
@@ -34,27 +50,37 @@ def get_softmax_by_boundary(similarity, boundaries, fn=torch.softmax):
           ]
 
 
-def run_hierarchy_rnn_with_pack(sequence, rnn):
-  '''
-  sequence (torch.Tensor): zero-padded sequece of N x T x C
-  lstm (torch.LSTM): LSTM layer
-  '''
-  batch_note_length = sequence.shape[1] - (sequence==0).all(dim=-1).sum(-1)
-  packed_sequence = pack_padded_sequence(sequence, batch_note_length.cpu(), True, False )
-  hidden_out, _ = rnn(packed_sequence)
-  hidden_out, _ = pad_packed_sequence(hidden_out, True)
-
-  return hidden_out
-
-
 def make_higher_node(note_hidden, attention_weights, measure_numbers):
+    """
+    Prepares inputs for the measure-level GRU by aggregating note-level hidden states using `context attention`.
+
+    This function processes note-level hidden vectors using attention weights and measure boundary information
+    to generate aggregated representations for each measure.
+    These representations serve as inputs to the measure-level GRU.
+    
+    Process:
+        1. note_hidden -> `ContextAttention.get_attention` -> similarity
+        2. measure_numbers -> `find_boundaries_batch` -> boundaries
+        3. similarity, boundaries -> `get_softmax_by_boundary` -> softmax_similarity
+        4. softmax_similarity, note_hidden -> (return) higher_nodes
+    
+    Args:
+        note_hidden (torch.Tensor): 
+            Note-level hidden states of shape `[batch_size, sequence_length, hidden_size]`
+        attention_weights (ContextAttention): 
+            The attention mechanism used to compute similarity scores and weight the note-level hidden states.
+        measure_numbers (torch.Tensor): 
+            Tensor indicating measure boundaries for each batch, with shape `[batch_size, sequence_length]`.
+
+    Returns:
+        higher_nodes (torch.Tensor): 
+            Measure-level input representations of shape `[batch_size, num_measures, hidden_size]`
+    """
     similarity = attention_weights.get_attention(note_hidden)
     boundaries = find_boundaries_batch(measure_numbers)
     softmax_similarity = torch.nn.utils.rnn.pad_sequence(
       [torch.cat(get_softmax_by_boundary(similarity[batch_idx], boundaries[batch_idx]))
-        for batch_idx in range(len(note_hidden))], 
-      batch_first=True
-    )
+        for batch_idx in range(len(note_hidden))], batch_first=True)
     
     if hasattr(attention_weights, 'head_size'):
         x_split = torch.stack(note_hidden.split(split_size=attention_weights.head_size, dim=2), dim=2)
@@ -62,9 +88,7 @@ def make_higher_node(note_hidden, attention_weights, measure_numbers):
         weighted_x = weighted_x.view(x_split.shape[0], x_split.shape[1], note_hidden.shape[-1])
         higher_nodes = torch.nn.utils.rnn.pad_sequence([
           torch.cat([torch.sum(weighted_x[i:i+1,boundaries[i][j-1]:boundaries[i][j],: ], dim=1) for j in range(1, len(boundaries[i]))], dim=0) \
-          for i in range(len(note_hidden))
-        ], batch_first=True
-        )
+          for i in range(len(note_hidden))], batch_first=True)
     else:
         weighted_sum = softmax_similarity * note_hidden
         higher_nodes = torch.cat([torch.sum(weighted_sum[:,boundaries[i-1]:boundaries[i],:], dim=1) 
@@ -72,14 +96,20 @@ def make_higher_node(note_hidden, attention_weights, measure_numbers):
     return higher_nodes
 
 
-def span_measure_to_note_num(measure_out, measure_number):
-  '''
-  Broadcasting measure-level output into note-level,
-  so that each note or token’s hidden output was concatenated with the measure-level output of the previous measure afterward.
-  
-  measure_out (torch.Tensor): N x T_measure x C
-  measure_number (torch.Tensor): N x T_note x C
-  '''
+def span_measure_to_note_num(measure_hidden, measure_number):
+  """
+  Broadcasts measure-level output to note-level, assigning each note the hidden output of the corresponding previous measure.
+
+  This function transforms measure-level hidden states into note-level representations,
+  so that each note or token is associated with the measure-level output of the preceding measure.
+
+  Args:
+      measure_hidden (torch.Tensor): Tensor of shape `[N, T_measure, C]`
+      measure_number (torch.Tensor): Tensor of shape `[N, T_note]`
+
+  Returns:
+      torch.Tensor: A tensor of shape `[N, T_note, C]` containing note-level representations derived from measure-level outputs.
+  """
   zero_shifted_measure_number = measure_number - measure_number[:,0:1]
   len_note = cal_length_from_padded_measure_numbers(measure_number)
 
@@ -89,18 +119,23 @@ def span_measure_to_note_num(measure_out, measure_number):
 
   measure_indices = measure_indices - 1 # note has to get only previous measure info
 
-  span_mat = torch.zeros(measure_number.shape[0], measure_number.shape[1], measure_out.shape[1]).to(measure_out.device)
-  span_mat[batch_indices, note_indices, measure_indices] = 1
+  span_mat = torch.zeros(measure_number.shape[0], measure_number.shape[1], measure_hidden.shape[1]).to(measure_hidden.device)
+  span_mat[batch_indices, note_indices, measure_indices] = 1 # assigning a value of 1 to valid indice
   span_mat[:, :, -1] = 0 # last measure is not used
-  spanned_measure = torch.bmm(span_mat, measure_out)
+  spanned_measure = torch.bmm(span_mat, measure_hidden) # spanning measures to notes
   return spanned_measure
 
-def cal_length_from_padded_measure_numbers(measure_numbers):
-  '''
-  measure_numbers (torch.Tensor): N x T, zero padded note_location_number
 
-  output (torch.Tensor): N
-  '''
+def cal_length_from_padded_measure_numbers(measure_numbers):
+  """
+  Calculates the length of note sequences from zero-padded measure numbers.
+
+  Args:
+      measure_numbers (torch.Tensor): Tensor of shape `[batch size, sequence length]`, zero-padded measure number.
+
+  Returns:
+      len_note (torch.Tensor): Tensor of shape `[batch size]` containing the effective lengths of the note sequences in the batch.
+  """
   try:
     len_note = torch.min(torch.diff(measure_numbers,dim=1), dim=1)[1] + 1
   except:

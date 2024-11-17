@@ -1,8 +1,8 @@
-from typing import Union
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence, pack_padded_sequence
 from module import MeasureGRU, DurPitchDecoder
+from omegaconf import DictConfig
 
 
 
@@ -106,7 +106,6 @@ class PitchDurModel(LanguageModel):
     return emb
   
   def _apply_softmax(self, logit):
-    # logit.shape = [num_total_notes, vocab_size[0] + vocab_size[1]]
     prob = logit[:, :self.vocab_size[0]].softmax(dim=-1)
     prob = torch.cat([prob, logit[:, self.vocab_size[0]:].softmax(dim=-1)], dim=1)
     return prob
@@ -173,11 +172,6 @@ class MeasureInfoModel(PitchDurModel):
     # <start>, <pad>, <m_idx:0>, <m_offset:0>
     out = vocab.prepare_start_token(header)
     return torch.LongTensor([out]).to(self.device)
-    # start_token_idx = vocab.tok2idx['main']['<start>']
-    # dur_token_idx =  vocab.tok2idx['dur']['<pad>']
-    # m_idx = vocab.tok2idx['m_idx']['m_idx:0']
-    # m_offset = vocab.tok2idx['m_offset']['m_offset:0.0']
-    # return torch.LongTensor([[start_token_idx, dur_token_idx, m_idx, m_offset]]).to(self.device)
 
   def _inference_one_step(self, *args, **kwargs):
     selected_token, last_hidden, vocab = args
@@ -194,90 +188,60 @@ class MeasureInfoModel(PitchDurModel):
     with torch.inference_mode():
       header, global_condition = self.prepare_global_info(vocab, header)
       measure_sampler = MeasureSampler(vocab, header)
-      start_token_idx = vocab.vocab['main'].index('<start>')
       selected_token, last_hidden, total_out = self._prepare_inference(vocab, manual_seed)
       selected_token = torch.cat([selected_token, global_condition], dim=-1)
 
-      total_probs = []
-
       while True:
         selected_token, last_hidden = self._inference_one_step(selected_token, last_hidden, vocab)
-        # emb = self._get_embedding(selected_token.unsqueeze(0)) # embedding vector 변환 [1,128] -> [1, 1, 128]
-        # hidden, last_hidden = self.rnn(emb, last_hidden)
-        # logit = self.proj(hidden)
-        # prob = self._apply_softmax(logit)
-        # selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
         if 2 in selected_token: # Generated End token
           break 
         total_out.append(selected_token)
-        # total_probs.append(prob)
 
         measure_sampler.update(selected_token) # update measure info
-        '''
-        sampled_token_str = vocab.vocab['main'][selected_token[0,0].item()]
-
-        if '|' in sampled_token_str:
-          if cur_m_offset > full_measure_duration / 2:
-            # cur_m_index += 1
-            # cur_m_offset = 0
-            next_m_index = cur_m_index + 1
-          next_m_offset = 0
-          if '|1' in sampled_token_str:
-            first_ending_offset = next_m_index
-          if '|2' in sampled_token_str:
-            next_m_index = first_ending_offset
-        elif '|:' in sampled_token_str:
-          next_m_index = 0
-        elif '(' in sampled_token_str:
-          tuplet_count = int(sampled_token_str.replace('(', ''))
-        elif 'pitch' in sampled_token_str:
-          sampled_dur = float(vocab.vocab['dur'][selected_token[0,1].item()].replace('dur', ''))
-          # cur_m_offset += sampled_dur
-          if tuplet_count == 0:
-            if tuplet_duration:
-              next_m_offset = cur_m_offset + tuplet_duration * 2
-              tuplet_duration = 0
-            else:
-              next_m_offset = cur_m_offset + sampled_dur
-          else:
-            next_m_offset = cur_m_offset
-            tuplet_count -= 1
-            tuplet_duration = sampled_dur
-          # print(sampled_token_str, sampled_dur, cur_m_offset)
-        else:
-          tuplet_count = 0
-          tuplet_duration = 0
-          pass
-          # print(sampled_token_str, cur_m_offset)
-        '''
-
-        # measure_token = self._get_measure_info([cur_m_index, cur_m_offset], vocab)
         measure_token = measure_sampler.get_measure_info_tensor().to(self.device)
         selected_token = torch.cat([selected_token, measure_token, global_condition], dim=-1)
 
-        # measure_sampler.update_measure_info()
-        # cur_m_offset = next_m_offset
-        # cur_m_index = next_m_index
-
-    return torch.cat(total_out, dim=0) #, torch.cat(total_probs, dim=0)
+    return torch.cat(total_out, dim=0)
 
 
 class MultiEmbedding(nn.Module):
+  """
+  A multi-input embedding layer that combines embeddings from multiple vocabularies.
+  Each vocabulary has its own embedding layer, and their outputs are concatenated along the last dimension.
+
+  Args:
+      vocab_sizes (Dict): A dictionary where keys are vocabulary names and values are the sizes of the vocabularies.
+      vocab_param (DictConfig): A configuration object or dictionary containing the embedding sizes for each vocabulary key in `vocab_sizes`.
+
+  Attributes:
+      layers (nn.ModuleList): A list of embedding layers, one for each vocabulary, where the size is determined by `vocab_param`.
+
+  Methods:
+      forward(x): Combines embeddings for each input token and concatenates them.
+      get_embedding_size(vocab_sizes, vocab_param): Determines the embedding sizes for each vocabulary.
+  """
+    
   def __init__(self, vocab_sizes: dict, vocab_param) -> None:
     super().__init__()
     self.layers = []
     embedding_sizes = self.get_embedding_size(vocab_sizes, vocab_param)
-    # if isinstance(embedding_sizes, int):
-    #   embedding_sizes = [embedding_sizes] * len(vocab_sizes)
     for vocab_size, embedding_size in zip(vocab_sizes.values(), embedding_sizes):
       if embedding_size != 0:
         self.layers.append(nn.Embedding(vocab_size, embedding_size))
     self.layers = nn.ModuleList(self.layers)
 
   def forward(self, x):
-    # num_embeddings = torch.tensor([x.num_embeddings for x in self.layers])
-    # max_indices = torch.max(x, dim=0)[0].cpu()
-    # assert (num_embeddings > max_indices).all(), f'num_embeddings: {num_embeddings}, max_indices: {max_indices}'
+    """
+    Forward pass for the MultiEmbedding layer.
+
+    Args:
+        x (torch.Tensor): Input tensor of shape `[total_seq_len, num_vocab]`.
+            Each `[..., i]` slice corresponds to a token index for the `i`-th vocabulary.
+
+    Returns:
+        torch.Tensor: Concatenated embeddings of shape `[total_seq_len, total_embedding_size]`,
+        where `total_embedding_size` is the sum of all individual embedding sizes.
+    """
     return torch.cat([module(x[..., i]) for i, module in enumerate(self.layers)], dim=-1)
 
   def get_embedding_size(self, vocab_sizes, vocab_param):
@@ -294,13 +258,12 @@ class MeasureHierarchyModel(MeasureInfoModel):
                                   dropout=net_param.measure.dropout)
 
   def _make_projection_layer(self):
-    # self.proj = DurPitchDecoder(self.hidden_size * 2, self.hidden_size, self.vocab_size[0], self.vocab_size[1])
     self.proj = nn.Linear((self.net_param.note.hidden_size + self.net_param.measure.hidden_size), self.vocab_size[0] + self.vocab_size[1])
   
 
   def forward(self, input_seq, measure_numbers):
     '''
-    token -> rnn note_embedding                 -> projection -> pitch, duration
+    token -> rnn note_embedding                 -> projection -> softmax -> prob(pitch, duration)
                   | context attention          ^
                    -> rnn measure_embedding   _|(cat)
     '''
@@ -356,7 +319,6 @@ class MeasureHierarchyModel(MeasureInfoModel):
         if selected_token[0,0] == 2: # Generated End token
           break 
         total_out.append(selected_token)
-        # total_probs.append(prob)
 
         measure_sampler.update(selected_token)
         if measure_sampler.measure_number != prev_measure_num:
@@ -371,7 +333,34 @@ class MeasureHierarchyModel(MeasureInfoModel):
 
 
 class MeasureNoteModel(MeasureHierarchyModel):
-  def __init__(self, vocab_size, net_param):
+  """
+  A hierarchical model for music sequence generation that incorporates 
+  note-level, measure-level, and final-level information.
+
+  Inherits from MeasureHierarchyModel, which uses note-level and measure-level 
+  representations. MeasureNoteModel extends this functionality by adding 
+  a final-level GRU layer to further combine note and measure-level features.
+
+  Attributes:
+      vocab_size (List): The vocabulary size for note and duration tokens.
+      net_param (DictConfig): A DictConfig containing network parameters for embedding, RNNs, and other components.
+      final_rnn (torch.nn.GRU): The final GRU layer combining note and measure hidden states.
+      proj (torch.nn.Linear): A projection layer mapping the final hidden state to the vocabulary size.
+
+  Methods:
+      forward(input_seq, measure_numbers):
+          Processes a sequence of inputs and produces probabilities for the next tokens.
+      _make_projection_layer():
+          Creates the projection layer for the model.
+      _prepare_inference(vocab, header, manual_seed):
+          Prepares the model's state for inference.
+      _inference_one_step(*args, **kwargs):
+          Performs a single step of inference.
+      inference(vocab, manual_seed=0, header=None):
+          Generates sequences token-by-token using the model.
+  """
+    
+  def __init__(self, vocab_size: list, net_param: DictConfig):
     super().__init__(vocab_size, net_param)
     self.final_rnn = nn.GRU((self.net_param.note.hidden_size + self.net_param.measure.hidden_size),
                             self.net_param.final.hidden_size,
@@ -384,6 +373,20 @@ class MeasureNoteModel(MeasureHierarchyModel):
     self.proj = nn.Linear(self.net_param.final.hidden_size, self.vocab_size[0] + self.vocab_size[1])
 
   def forward(self, input_seq, measure_numbers):
+    """
+    Process:
+        token -> rnn note_embedding                -> rnn final_embedding -> projection -> softmax -> prob(pitch, duration)
+                      | context attention         ^
+                      -> rnn measure_embedding   _|(cat)
+    
+    Args:
+        input_seq (PackedSequence): Input sequence(melody). Has a shape of [total_seq_len, vocab_type_num].
+        measure_numbers (PackedSequence): Measure number information per note. Has a shape of [total_seq_len].
+
+    Returns:
+        prob (PackedSequence): Output probabilities for each token in the sequence.
+            Has a shape of [total_seq_len, number of main + dur classes].
+    """
     if isinstance(input_seq, PackedSequence):
       emb = self._get_embedding(input_seq)
       note_hidden, _ = self.rnn(emb)
@@ -486,7 +489,6 @@ class MeasureNotePitchFirstModel(MeasureNoteModel):
     selected_token = torch.tensor(converted_out, dtype=torch.long).to(emb.device).unsqueeze(0)
     return selected_token, last_hidden, last_final_hidden
 
-
   def forward(self, input_seq, measure_numbers):
     '''
     token -> rnn note_embedding                 -> projection -> pitch, duration
@@ -511,6 +513,7 @@ class MeasureNotePitchFirstModel(MeasureNoteModel):
 
     return prob
 
+
 class MeasureSampler:
   def __init__(self, vocab, header):
     self.vocab = vocab
@@ -532,12 +535,6 @@ class MeasureSampler:
 
     return torch.tensor([self.vocab.encode_m_idx(idx) + self.vocab.encode_m_offset(offset, self.header)], dtype=torch.long)
 
-    return torch.LongTensor([[self.vocab.tok2idx['m_idx'][idx], self.vocab.tok2idx['m_offset'][offset]]])
-
-  # def update_measure_info(self):
-  #   self.cur_m_offset = self.next_m_offset
-  #   self.cur_m_index = self.next_m_index
-
   def update(self, selected_token):
     sampled_token_str = self.vocab.vocab['main'][selected_token[0,0].item()]
     if '|' in sampled_token_str:
@@ -555,7 +552,6 @@ class MeasureSampler:
       self.tuplet_count = int(sampled_token_str.replace('(', ''))
     elif 'pitch' in sampled_token_str:
       sampled_dur = float(self.vocab.vocab['dur'][selected_token[0,1].item()].replace('dur', ''))
-      # cur_m_offset += sampled_dur
       if self.tuplet_count == 0:
         if self.tuplet_duration:
           self.cur_m_offset += self.tuplet_duration * 2
@@ -571,9 +567,6 @@ class MeasureSampler:
     else:
       self.tuplet_count = 0
       self.tuplet_duration = 0
-
-
-
 
 
 class MeasureGPT(MeasureInfoModel):

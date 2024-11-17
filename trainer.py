@@ -8,6 +8,10 @@ from decoding import LanguageModelDecoder
 from pathlib import Path
 from collections import defaultdict
 import time
+from torch.nn.utils.rnn import PackedSequence
+from typing import Tuple, Union, Optional
+
+
 
 class Trainer:
   def __init__(self, model, 
@@ -103,12 +107,10 @@ class Trainer:
       self.scheduler.step(validation_loss)
       validation_metric_dict = self._rename_dict(validation_metric_dict, 'valid')
       wandb.log(validation_metric_dict)
-      # wandb.log({"validation_loss": validation_loss,
-      #            "validation_acc": validation_acc})
+      
       self.validation_loss.append(validation_loss)
       self.validation_acc.append(validation_acc)
       
-      # if validation_acc > self.best_valid_accuracy:
       if validation_loss < self.best_valid_loss:
         print(f"Saving the model with best validation loss: Epoch {epoch+1}, Loss: {validation_loss:.4f} ")
         self.save_model(self.save_dir / f'{self.model_name}_best.pt')
@@ -119,26 +121,19 @@ class Trainer:
       if epoch % self.num_epoch_per_log == 0:
         self.inference_and_log(epoch)
 
-      # decoded_output = decode_melody(generated_output, self.vocab)
-      # wandb.log({"generated_abc": Html(decoded_output)})
-
       
-  def _train_by_single_batch(self, batch):
-    '''
-    This method updates self.model's parameter with a given batch
-    
-    batch (tuple): (batch_of_input_text, batch_of_label)
-    
-    You have to use variables below:
-    
-    self.model (Translator/torch.nn.Module): A neural network model
-    self.optimizer (torch.optim.adam.Adam): Adam optimizer that optimizes model's parameter
-    self.loss_fn (function): function for calculating BCE loss for a given prediction and target
-    self.device (str): 'cuda' or 'cpu'
+  def _train_by_single_batch(self, batch: Tuple[PackedSequence]) -> Tuple[float, dict]:
+    """
+    Trains the model using a single batch of data.
 
-    output: loss (float): Mean binary cross entropy value for every sample in the training batch
-    The model's parameters, optimizer's steps has to be updated inside this method
-    '''
+    Args:
+        batch (Tuple[PackedSequence]):
+            - batch_of_melody, batch_of_shifted_melody, measure_numbers(Optional).
+
+    Returns:
+        Tuple[float, dict]: 
+            - loss, loss_dict
+    """
     start_time = time.time()
     loss, _, loss_dict = self.get_loss_pred_from_single_batch(batch)
     loss.backward()
@@ -173,19 +168,20 @@ class Trainer:
     return validation_loss, num_total_tokens, validation_acc, loss_dict
 
     
-  def validate(self, external_loader=None):
-    '''
-    This method calculates accuracy and loss for given data loader.
-    It can be used for validation step, or to get test set result
-    
-    input:
-      data_loader: If there is no data_loader given, use self.valid_loader as default.
-      
-    output: 
-      validation_loss (float): Mean Binary Cross Entropy value for every sample in validation set
-      validation_accuracy (float): Mean Accuracy value for every sample in validation set
-    '''
-    
+  def validate(self, external_loader=None) -> Tuple[float, float, dict]:
+    """
+    This method evaluates the model on a validation or test set by calculating the mean loss, accuracy.
+
+    Args:
+        external_loader (DataLoader, optional): An external data loader to use for validation.
+            If not provided, `self.valid_loader` is used as the default.
+
+    Returns:
+        Tuple[float, float, dict]:
+            - validation_loss (float): The mean negative log-likelihood (NLL) loss over the dataset.
+            - validation_accuracy (float): The mean accuracy over the dataset.
+            - validation_metric_dict (Dict[float]): [main(loss), dur(loss), total(loss), main_acc, dur_acc]
+    """
     ### Don't change this part
     if external_loader and isinstance(external_loader, DataLoader):
       loader = external_loader
@@ -193,9 +189,6 @@ class Trainer:
     else:
       loader = self.valid_loader
       
-    '''
-    Write your code from here, using loader, self.model, self.loss_fn.
-    '''
     validation_loss = 0
     validation_acc = 0
     num_total_tokens = 0
@@ -215,8 +208,6 @@ class Trainer:
     return validation_loss / num_total_tokens, validation_acc / num_total_tokens, validation_metric_dict
 
   def inference_and_log(self, iter, num_sample=20):
-    # generated_output = self.model.inference(self.vocab)
-    # self.abc_decoder(generated_output, self.save_dir / f'abc_decoded_{iter}')
     for i in range(num_sample):
       try:
         generated_output = self.model.inference(self.vocab, manual_seed=i)
@@ -291,7 +282,26 @@ class TrainerMeasure(TrainerPitchDur):
                      args):
     super().__init__(model, optimizer, scheduler, loss_fn, train_loader, valid_loader, args)
 
-  def get_loss_pred_from_single_batch(self, batch):
+  def get_loss_pred_from_single_batch(self, batch: Tuple[PackedSequence]) -> Tuple[torch.Tensor, PackedSequence, dict]:
+    """
+    Computes the loss(nll loss) and predictions for a single batch of data
+    
+    Note:
+        - self.model.vocab_size[0]: vocab size of main
+
+    Args:
+        batch (Tuple[PackedSequence]):
+            A tuple containing:
+            - melody (PackedSequence): The melody data as a shape of [total_seq_len, vocab_type_num].
+            - shifted_melody (PackedSequence): The shifted melody data as a shape of [total_seq_len, vocab_type_num].
+            - measure_numbers (PackedSequence): The measure numbers as a shape of [total_seq_len]
+
+    Returns:
+        Tuple[torch.Tensor, PackedSequence, dict]:
+            - loss (float): The total loss computed for the batch.
+            - pred (PackedSequence): The model's predictions for the batch, shape of [total_seq_len, vocab size of main + dur].
+            - loss_dict (Dict[float]): A dictionary containing the breakdown of the losses, [main, dur, total]
+    """
     melody, shifted_melody, measure_numbers = batch
     pred = self.model(melody.to(self.device), measure_numbers)
 
@@ -303,7 +313,26 @@ class TrainerMeasure(TrainerPitchDur):
 
     return loss, pred, loss_dict
 
-  def get_valid_loss_and_acc_from_batch(self, batch):
+  def get_valid_loss_and_acc_from_batch(self, batch: Tuple[PackedSequence]
+                                        ) -> Tuple[float, int, float, dict]:
+    """
+    Computes the validation loss and accuracy for a single batch of data.
+
+    This function evaluates the model's predictions for a batch, calculates the 
+    validation loss and accuracy (both main and duration), and provides a detailed 
+    breakdown of the results.
+
+    Args:
+        batch (Tuple[PackedSequence]):
+            A tuple containing:
+            - melody (PackedSequence): The melody data as a shape of [total_seq_len, vocab_type_num].
+            - shifted_melody (PackedSequence): The shifted melody data as a shape of [total_seq_len, vocab_type_num].
+            - measure_numbers (PackedSequence): The measure numbers as a shape of [total_seq_len].
+
+    Returns:
+        Tuple[float, int, float, dict]: A tuple containing [validation_loss, num_total_tokens, validation_acc, loss_dict]
+            - loss_dict (Dict[float]): A dictionary containing [main, dur, total, main_acc, dur_acc]
+    """
     melody, shifted_melody, _ = batch
     loss, pred, loss_dict = self.get_loss_pred_from_single_batch(batch)
     num_tokens = melody.data.shape[0]
