@@ -57,13 +57,6 @@ def is_valid_tune(tune):
     if token_text == ':||:4':
       return False
     # TODO: 파트가 여러개인 경우 처리하는 부분이 필요함
-  # for i in range(1,10):
-  #   last_token = tune.tokens[-i]
-    
-  #   if '|' in  last_token._text:
-  #     return True
-  #   elif isinstance(last_token, pyabc.Note):
-  #     return False
   return True
 
 
@@ -105,60 +98,17 @@ def get_min_max_pitch(tune: pyabc.Tune):
 def title_to_list_of_str(tune):
     return [vocab for vocab in tune.title.split(' ')]
 
-def read_abc(file_path):
-    with open(file_path, 'r') as f:
-        fr = f.read()
-    tune = pyabc.Tune(abc=fr)
-    return tune
-
 def read_tunes(file_path):
     with open(file_path, 'r') as f:
         fr = f.read()
     tunes = pyabc.Tunes(abc=fr)
     return tunes
 
-'''
- def prepare_abc(paths: list):
-    delete_list = ['Z:', 'F:', 'W:'] # F: 가 들어간 abc notation이 있는지 확인 -> 일단은 없음
-    tune_list = []
-    error_list = []
-    
-    for path in paths:
-        f = open(path)
-        abc = f.readlines()
-        length = len(abc)
-
-        for line in reversed(abc):
-            length -= 1
-            if line[:2] in delete_list: # 지워야할 헤더 항목과 각 라인의 앞 부분이 일치하면 pop
-                abc.pop(length)
-
-        abc = ''.join(abc)
-        abc = abc.replace('\\\n', '\n') # escape 문자로 \ 하나를 더 붙인 부분을 그냥 줄바꿈 기호로 치환
-
-        try: # TODO: 같은 tunes에 묶인 tune을 필요시 구별해서 묶어야함
-            tunes = pyabc.Tunes(abc=abc)
-            for tune in tunes.tunes:
-              # tune = pyabc.Tune(abc=abc)
-              if 'rhythm' not in tune.header:
-                tune.header['rhythm'] = 'Unspecified'
-              if 'unit note length' not in tune.header:
-                tune.header['rhythm'] = '1/8'
-              if is_valid_tune(tune):
-                  tune_list.append(tune)
-        except:
-            error_list.append(path.name)
-        
-    return tune_list, error_list
-'''
-
 def prepare_abc(paths: list):
   tune_list = []
   error_list = []
   for path in paths:
     try:
-      # tune = read_abc(path)
-      # tune_list.append(tune)
       tunes = read_tunes(path)
       if len(tunes.tunes) == 0:
         error_list.append(path)
@@ -297,16 +247,16 @@ class ABCsetTitle(ABCset):
 
 def pack_collate(raw_batch:list):
     '''
-  This function takes a list of data, and returns two PackedSequences
-  
-  Argument
-    raw_batch: A list of MelodyDataset[idx]. Each item in the list is a tuple of (melody, shifted_melody)
-               melody and shifted_melody has a shape of [num_notes (+1 if you don't consider "start" and "end" token as note), 2]
-  Returns
-    packed_melody (torch.nn.utils.rnn.PackedSequence)
-    packed_shifted_melody (torch.nn.utils.rnn.PackedSequence)
+    This function takes a list of data, and returns two PackedSequences
+    
+    Argument
+      raw_batch: A list of MelodyDataset[idx]. Each item in the list is a tuple of (melody, shifted_melody)
+                melody and shifted_melody has a shape of [num_notes (+1 if you don't consider "start" and "end" token as note), 2]
+    Returns
+      packed_melody (torch.nn.utils.rnn.PackedSequence)
+      packed_shifted_melody (torch.nn.utils.rnn.PackedSequence)
 
-  TODO: Complete this function
+    TODO: Complete this function
     '''  
     
     melody = [mel_pair[0] for mel_pair in raw_batch]
@@ -367,7 +317,6 @@ class MeasureOffsetSet(PitchDurSplitSet):
     data = [ [self._tune_to_list_of_str(tune), tune.header] for tune in self.tune_list]
     self.data = [x[0] for x in data]
     self.header = [x[1] for x in data]
-    # self.header = [tune.header for tune in self.tune_list if tune.is_tune_with_full_measures ]
 
   def get_str_m_offset(self, token):
     if token.measure_offset is not None:
@@ -389,9 +338,6 @@ class MeasureOffsetSet(PitchDurSplitSet):
     combined = [ [tk] + meas for tk, meas in zip(converted_tokens_w_start, measure_infos)]
 
     return combined
-    # [[token, 'm_idx:'+str(tune.tokens[i+1].meas_offset_from_repeat_start), 'm_offset:'+str(tune.tokens[i].measure_offset)  ]for i, token in enumerate(converted_tokens)]
-    # return [ [convert_token(token), 'm_idx:'+str(token.meas_offset_from_repeat_start), 'm_offset:'+str(token.measure_offset)] 
-    #           for token in tune.tokens if is_used_token(token) and convert_token(token) is not None]
 
   def _get_measure_info_tokens(self):
     return sorted(list(set([info for tune in self.data for token in tune for info in token[1:]])))
@@ -401,8 +347,6 @@ class MeasureOffsetSet(PitchDurSplitSet):
     unique_header_list = self._get_unique_header_tokens()
     unique_measure_info_list = self._get_measure_info_tokens()
     unique_char_list = sorted(list(set(entire_char_list)))  + unique_header_list + unique_measure_info_list
-    # self.vocab = TokenVocab(vocab_path, unique_char_list)
-    # self.vocab = MusicTokenVocab(vocab_path, unique_char_list)
     self.vocab = getattr(vocab_utils, vocab_name)(vocab_path, unique_char_list)
 
   def __getitem__(self, idx):
@@ -420,8 +364,6 @@ class MeasureOffsetSet(PitchDurSplitSet):
 class MeasureNumberSet(MeasureOffsetSet):
   def __init__(self, dir_path, vocab_path=None, num_limit=None, make_vocab=True, key_aug=None, vocab_name='MusicTokenVocab'):
     super().__init__(dir_path, vocab_path, num_limit, make_vocab, key_aug, vocab_name)
-    # self.vocab = getattr(vocab_utils, vocab_name)('cleaned_vocab_1005.json')
-    # self.filter_tune_by_vocab_exists()
 
   def _get_measure_info_tokens(self):
     return sorted(list(set([info for tune in self.data for token in tune for info in token[1:-1]])))
@@ -434,9 +376,6 @@ class MeasureNumberSet(MeasureOffsetSet):
     measure_infos = [ ['m_idx:'+str(tune.tokens[i].meas_offset_from_repeat_start), self.get_str_m_offset(tune.tokens[i]), tune.tokens[i].measure_number]  for i,_ in converted_tokens]
 
     assert '|' in converted_tokens[-1][1], f"Last token should be barline, {converted_tokens[-1]}"
-    # last_duration = tune.tokens[converted_tokens[-1][0]].duration if hasattr(tune.tokens[converted_tokens[-1][0]], 'duration') else 0
-    # last_offset = tune.tokens[converted_tokens[-1][0]].measure_offset + last_duration
-    # measure_infos += [[measure_infos[-1][0], f'm_offset:{last_offset}', measure_infos[-1][2]]] 
     measure_infos += [[f'm_idx:{str(tune.tokens[converted_tokens[-1][0]].meas_offset_from_repeat_start+1)}', 
                        'm_offset:0.0', 
                        measure_infos[-1][2]+1]]
@@ -445,8 +384,6 @@ class MeasureNumberSet(MeasureOffsetSet):
     combined = [ [tk] + meas for tk, meas in zip(converted_tokens_w_start, measure_infos)]
 
     return combined
-    return [ [convert_token(token), 'm_idx:'+str(token.meas_offset_from_repeat_start), 'm_offset:'+str(token.measure_offset), token.measure_number] 
-              for token in tune.tokens if is_used_token(token) and convert_token(token) is not None]
 
   def filter_tune_by_vocab_exists(self):
     new_tunes = []
@@ -457,9 +394,7 @@ class MeasureNumberSet(MeasureOffsetSet):
         [self.vocab(token, header) for token in converted_tune]
         new_tunes.append(tune)
         new_headers.append(header)
-        # print('tune added')
       except Exception as e:
-        # print(e)
         continue
     self.data = new_tunes
     self.header = new_headers
@@ -503,8 +438,6 @@ class MeasureNumberSet(MeasureOffsetSet):
     tune_tensor = torch.LongTensor(tune_in_idx)
     header_tensor = torch.LongTensor(self.vocab.encode_header(new_header))
     tune_tensor = torch.cat([tune_tensor, header_tensor.repeat(len(tune_tensor), 1)], dim=-1)
-    # if sum([a>=b for a, b in zip(torch.max(tune_tensor, dim=0).values.tolist(), [x for x in self.vocab.get_size().values()])]) != 0:
-    #   print (tune_tensor)
 
     return tune_tensor[:-1], tune_tensor[1:], torch.tensor(measure_numbers, dtype=torch.long)
 
@@ -615,7 +548,6 @@ class FolkRNNSet:
     tune_tensor = torch.cat([tune_tensor, header_tensor.repeat(len(tune_tensor), 1)], dim=-1)
 
     return tune_tensor[:-1], tune_tensor[1:]
-
 
 
 def get_tunes_from_abc_fns(abc_fns):
