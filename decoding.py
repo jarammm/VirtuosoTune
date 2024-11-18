@@ -87,6 +87,8 @@ class Note2ABC:
     return abc_notation
 
   def pitch2abc(self, midi_pitch: int, is_sharp: bool):
+    #TODO: Vocabulary shortage :
+    # Error(list index out of range) occurs in 'self.abc_vocab' & 'self.abc_vocab_flat'
     if is_sharp:
       return self.abc_vocab[midi_pitch-36]
     else:
@@ -160,9 +162,8 @@ class LanguageModelDecoder:
     return self.chromatic[new_root_idx] + ' ' + mode
 
 
-  def decode(self, model_pred, meta_string='X:1\nT:Title\nM:4/4\nL:1/8\nK:C\n', transpose=0):
+  def decode(self, model_pred, meta_string, transpose):
     '''
-    
     transpose (int): amount of transpose in semitones
     '''
     list_of_string = self.vocab.decode(model_pred)
@@ -219,12 +220,11 @@ class LanguageModelDecoder:
 
     return new_str
 
-  def __call__(self, model_pred_or_abc, file_code='abc_decoded_0', save_image=True, save_audio=True, meta_string='X:1\nT:Title\nM:4/4\nL:1/8\nK:C\n',):
-    # list_of_string = [self.vocab[token] for token in model_pred.tolist()[1:]]
+  def __call__(self, model_pred_or_abc, file_code='abc_decoded_0', save_image=True, save_audio=True, meta_string='X:1\nT:Title\nM:4/4\nL:1/8\nK:C Major\n', transpose=0):
     if isinstance(model_pred_or_abc, str):
       abc_decoded = model_pred_or_abc
     else:
-      abc_decoded = self.decode(model_pred_or_abc, meta_string)
+      abc_decoded = self.decode(model_pred_or_abc, meta_string, transpose)
     if save_image:
       save_score_image_from_abc(abc_decoded, self.save_dir / f'{file_code}.png')
     if save_audio:
