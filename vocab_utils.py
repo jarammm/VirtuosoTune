@@ -74,7 +74,6 @@ class TokenVocab:
     return sorted(new_key_vocab)
 
   def get_size(self):
-    # return [len(self.vocab[x]) for x in self.key_types]
     return {x:len(self.vocab[x]) for x in self.key_types}
 
   def __len__(self):
@@ -127,11 +126,6 @@ class TokenVocab:
 
   def get_default_header(self):
     default_header = {'key':'C Major', 'meter':'4/4', 'unit note length':'1/8', 'rhythm':'reel'}
-    # if 'K: '+ default_header['key'] not in self.vocab['key']:
-    #   if 'K: G' in self.tok2idx['key']:
-    #     default_header['key'] = 'G'
-    #   elif 'K: Gmaj' in self.tok2idx['key']:
-    #     default_header['key'] = 'Gmaj'
     
     if 'R: ' + default_header['rhythm'] not in self.vocab['rhythm']:
       if 'R: Reel' in self.tok2idx['rhythm']:
@@ -335,6 +329,19 @@ class NoteMusicTokenVocab(MusicTokenVocab):
       return [pitch_idx, self.tok2idx['pitch_class'][pitch_class], self.tok2idx['octave'][octave]]
 
   def prepare_start_token(self, header):
+    """
+    Prepares the start token for initialization.
+    
+    Args:
+        header (optional): Additional information for encoding (if required).
+    Returns:
+        Encoded representation of the start token.
+    Note:
+        1. Start informations are initialized as, main = '<start>', m_idx = 'm_idx:0', m_offset = 'm_offset:0.0'
+        2. Through __call__ method, this informations will be encoded as,
+            '<start>' -> [1,0,0,0], 'm_idx:0' -> [3,3], 'm_offset:0.0' -> [3,4,3]
+        3. Finally this function returns [1,0,0,0,3,3,3,4,3]
+    """
     main = '<start>'
     m_idx = 'm_idx:0'
     m_offset = 'm_offset:0.0'
@@ -364,7 +371,6 @@ class NoteMusicTokenVocab(MusicTokenVocab):
         main, pitch_class, octave = self.encode_pitch(pitch)
         dur = self.tok2idx['dur'][dur]
         return [main, dur, pitch_class, octave]
-        # return self.encode_pitch(pitch) + [self.tok2idx['dur'][dur]]
       else:
         print('Error: {} is not in the vocab'.format(word))
         return None
