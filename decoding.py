@@ -162,7 +162,7 @@ class LanguageModelDecoder:
     return self.chromatic[new_root_idx] + ' ' + mode
 
 
-  def decode(self, model_pred, meta_string, transpose):
+  def decode(self, model_pred, meta_string, transpose=0):
     '''
     transpose (int): amount of transpose in semitones
     '''

@@ -212,7 +212,7 @@ class Trainer:
       try:
         generated_output = self.model.inference(self.vocab, manual_seed=i)
         save_out = i==0 # only save the first one
-        self.abc_decoder(generated_output, self.save_dir / f'abc_decoded_{iter}_seed_{i}', True, save_out)
+        self.abc_decoder(generated_output, f'abc_decoded_{iter}_seed_{i}', True, save_out)
         if self.make_log and save_out:
           wandb.log({"gen_score": wandb.Image(str(self.save_dir /f'abc_decoded_{iter}_seed_{i}-1.png')), 
                     "gen_audio": wandb.Audio(str(self.save_dir /f'abc_decoded_{iter}_seed_{i}.wav'))}

@@ -62,7 +62,6 @@ def inference(args):
       tune = pyabc.Tune(gen_abc)
       if data_utils.is_good_reel(tune):
         min_pitch, max_pitch = data_utils.get_min_max_pitch(tune)
-        # new_key, transpose = get_rand_transpose(header['key'], rand_seed)
         new_key, transpose = get_transpose_by_pitch(header['key'], min_pitch, max_pitch)
         gen_abc = decoder.decode(out, meta_string, transpose=transpose)
         file_name = f'model_{yaml_path.stem}_seed_{rand_seed}_key_{new_key}'
