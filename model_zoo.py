@@ -58,11 +58,10 @@ class LanguageModel(nn.Module):
     return torch.LongTensor([start_token_idx]).to(self.device)
 
   def _prepare_inference(self, start_token_idx, manual_seed):
-    selected_token = self._prepare_start_token(start_token_idx)
+    start_token = self._prepare_start_token(start_token_idx)
     last_hidden = torch.zeros([self.rnn.num_layers, 1, self.rnn.hidden_size]).to(self.device)
-    total_out = []
     torch.manual_seed(manual_seed)
-    return selected_token, last_hidden, total_out
+    return start_token, last_hidden
 
 
   def inference(self, start_token_idx=1, manual_seed=0):
@@ -70,16 +69,17 @@ class LanguageModel(nn.Module):
     x can be just start token or length of T
     '''
     with torch.inference_mode():
-      selected_token, last_hidden, total_out = self._prepare_inference(start_token_idx, manual_seed)
+      curr_token, last_hidden = self._prepare_inference(start_token_idx, manual_seed)
+      total_out = []
       while True:
-        emb = self.emb(selected_token.unsqueeze(0)) # embedding vector 변환 [1,128] -> [1, 1, 128]
+        emb = self.emb(curr_token.unsqueeze(0)) # embedding vector 변환 [1,128] -> [1, 1, 128]
         hidden, last_hidden = self.rnn(emb, last_hidden)
         logit = self.proj(hidden)
         prob = torch.softmax(logit, dim=-1)
-        selected_token = prob.squeeze().multinomial(num_samples=1)
-        if selected_token == 2: # Generated End token
+        curr_token = prob.squeeze().multinomial(num_samples=1)
+        if curr_token == 2: # Generated End token
           break 
-        total_out.append(selected_token)
+        total_out.append(curr_token)
       return torch.cat(total_out, dim=0)
 
 
@@ -111,6 +111,18 @@ class PitchDurModel(LanguageModel):
     return prob
 
   def _sample_by_token_type(self, prob, vocab):
+    """
+    Sample indices of token type for def '_inference_one_step'
+    Args:
+        prob (torch.Tensor): 1D tensor [self.vocab_size[0]+self.vocab_size[1]]
+            - self.vocab_size[0]: size of main values
+            - self.vocab_size[1]: size of dur values
+        vocab (NoteMusicTokenVocab)
+
+    Returns:
+       torch.Tensor: tensor([[pitch_idx, dur_idx, pitch_class_idx, octave_idx]])
+          - If it's not a pitch, then pitch_class_idx, octave_idx are 0.
+    """
     main_prob = prob[:self.vocab_size[0]]
     dur_prob = prob[self.vocab_size[0]:]
     main_token = main_prob.multinomial(num_samples=1)
@@ -122,12 +134,18 @@ class PitchDurModel(LanguageModel):
     
     converted_out = vocab.convert_inference_token(main_token, dur_token)
     return torch.tensor(converted_out, dtype=torch.long).to(main_prob.device).unsqueeze(0)
-    # return torch.cat([main_token, dur_token]).unsqueeze(0)
 
   def _prepare_start_token(self, start_token_idx):
     return torch.LongTensor([[start_token_idx, start_token_idx]]).to(self.device)
 
   def prepare_global_info(self, vocab, header):
+    """
+    Returns:
+        header (dict): Default header from vocab.get_default_header() is
+            {'key':'C Major', 'meter':'4/4', 'unit note length':'1/8', 'rhythm':'reel'}
+        header_idx (list): header_idx list consist of
+            [key, meter, unit_length, rhythm, root, mode, key_sig, numer, denom, is_compound, is_triple]
+    """
     if header is None:
       header = vocab.get_default_header()
     header_idx = vocab.encode_header(header)
@@ -137,17 +155,18 @@ class PitchDurModel(LanguageModel):
   def inference(self, vocab, manual_seed=0, header=None):
     header, global_condition = self.prepare_global_info(vocab, header)
     start_token_idx = vocab.vocab['main'].index('<start>')
-    selected_token, last_hidden, total_out = self._prepare_inference(start_token_idx, manual_seed)
+    total_out = []
+    curr_token, last_hidden = self._prepare_inference(start_token_idx, manual_seed)
     while True:
-      selected_token = torch.cat([selected_token, global_condition], dim=-1)
-      emb = self._get_embedding(selected_token.unsqueeze(0)) # embedding vector 변환 [1,128] -> [1, 1, 128]
+      curr_token = torch.cat([curr_token, global_condition], dim=-1)
+      emb = self._get_embedding(curr_token.unsqueeze(0)) # embedding vector 변환 [1,128] -> [1, 1, 128]
       hidden, last_hidden = self.rnn(emb, last_hidden)
       logit = self.proj(hidden)
       prob = self._apply_softmax(logit)
-      selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
-      if 2 in selected_token: # Generated End token
+      curr_token = self._sample_by_token_type(prob.squeeze(), vocab)
+      if 2 in curr_token: # Generated End token
         break 
-      total_out.append(selected_token)
+      total_out.append(curr_token)
     return torch.cat(total_out, dim=0)
 
 class MeasureInfoModel(PitchDurModel):
@@ -174,32 +193,32 @@ class MeasureInfoModel(PitchDurModel):
     return torch.LongTensor([out]).to(self.device)
 
   def _inference_one_step(self, *args, **kwargs):
-    selected_token, last_hidden, vocab = args
-    emb = self._get_embedding(selected_token.unsqueeze(0))
+    curr_token, last_hidden, vocab = args
+    emb = self._get_embedding(curr_token.unsqueeze(0))
     hidden, last_hidden = self.rnn(emb, last_hidden)
     logit = self.proj(hidden)
     prob = self._apply_softmax(logit)
-    selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
+    curr_token = self._sample_by_token_type(prob.squeeze(), vocab)
 
-    return selected_token, last_hidden
+    return curr_token, last_hidden
 
 
   def inference(self, vocab, manual_seed=0, header=None):
     with torch.inference_mode():
       header, global_condition = self.prepare_global_info(vocab, header)
       measure_sampler = MeasureSampler(vocab, header)
-      selected_token, last_hidden, total_out = self._prepare_inference(vocab, manual_seed)
-      selected_token = torch.cat([selected_token, global_condition], dim=-1)
+      start_token, last_hidden, total_out = self._prepare_inference(vocab, manual_seed)
+      curr_token = torch.cat([start_token, global_condition], dim=-1)
 
       while True:
-        selected_token, last_hidden = self._inference_one_step(selected_token, last_hidden, vocab)
-        if 2 in selected_token: # Generated End token
+        curr_token, last_hidden = self._inference_one_step(curr_token, last_hidden, vocab)
+        if 2 in curr_token: # Generated End token
           break 
-        total_out.append(selected_token)
+        total_out.append(curr_token)
 
-        measure_sampler.update(selected_token) # update measure info
+        measure_sampler.update(curr_token) # update measure info
         measure_token = measure_sampler.get_measure_info_tensor().to(self.device)
-        selected_token = torch.cat([selected_token, measure_token, global_condition], dim=-1)
+        curr_token = torch.cat([curr_token, measure_token, global_condition], dim=-1)
 
     return torch.cat(total_out, dim=0)
 
@@ -282,52 +301,51 @@ class MeasureHierarchyModel(MeasureInfoModel):
     return prob
 
   def _inference_one_step(self, *args, **kwargs):
-    selected_token, last_hidden, last_measure_out, vocab = args
-    emb = self._get_embedding(selected_token.unsqueeze(0))
+    curr_token, last_hidden, last_measure_out, vocab = args
+    emb = self._get_embedding(curr_token.unsqueeze(0))
     hidden, last_hidden = self.rnn(emb, last_hidden)
     cat_hidden = torch.cat([hidden, last_measure_out], dim=-1)
     logit = self.proj(cat_hidden)
     prob = self._apply_softmax(logit)
-    selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
+    curr_token = self._sample_by_token_type(prob.squeeze(), vocab)
 
-    return selected_token, last_hidden
+    return curr_token, last_hidden
 
   def _prepare_inference(self, vocab, header, manual_seed):
-    selected_token = self._prepare_start_token(vocab, header)
+    start_token = self._prepare_start_token(vocab, header) # 주어진 header에 따른 시작 토큰 생성
     last_hidden = torch.zeros([self.rnn.num_layers, 1, self.rnn.hidden_size]).to(self.device)
     last_measure_out = torch.zeros([1, 1, self.measure_rnn.hidden_size]).to(self.device)
     last_measure_hidden = torch.zeros([self.measure_rnn.num_layers, 1, self.measure_rnn.hidden_size]).to(self.device)
-    total_out = []
     torch.manual_seed(manual_seed)
-    return selected_token, last_hidden, last_measure_out, last_measure_hidden, total_out
+    return start_token, last_hidden, last_measure_out, last_measure_hidden
 
   def inference(self, vocab, manual_seed=0, header=None):
-    total_hidden = []
+    total_hidden, total_out = [], []
     with torch.inference_mode():
       header, global_condition = self.prepare_global_info(vocab, header)
       measure_sampler = MeasureSampler(vocab, header)
 
-      selected_token, last_hidden, last_measure_out, last_measure_hidden, total_out = self._prepare_inference(vocab, header, manual_seed)
-      selected_token = torch.cat([selected_token, global_condition], dim=-1)
+      start_token, last_hidden, last_measure_out, last_measure_hidden = self._prepare_inference(vocab, header, manual_seed)
+      curr_token = torch.cat([start_token, global_condition], dim=-1)
 
       prev_measure_num = 0
 
       while True:
-        selected_token, last_hidden = self._inference_one_step(selected_token, last_hidden, last_measure_out, vocab)
+        curr_token, last_hidden = self._inference_one_step(curr_token, last_hidden, last_measure_out, vocab)
         total_hidden.append(last_hidden[-1])
 
-        if selected_token[0,0] == 2: # Generated End token
+        if curr_token[0,0] == 2: # Generated End token
           break 
-        total_out.append(selected_token)
+        total_out.append(curr_token)
 
-        measure_sampler.update(selected_token)
+        measure_sampler.update(curr_token)
         if measure_sampler.measure_number != prev_measure_num:
           last_measure_out, last_measure_hidden = self.measure_rnn.one_step(torch.cat(total_hidden, dim=0).unsqueeze(0), last_measure_hidden)
           prev_measure_num = measure_sampler.measure_number
           total_hidden = []
         
         measure_token = measure_sampler.get_measure_info_tensor().to(self.device)
-        selected_token = torch.cat([selected_token, measure_token, global_condition], dim=-1)
+        curr_token = torch.cat([curr_token, measure_token, global_condition], dim=-1)
 
     return torch.cat(total_out, dim=0)
 
@@ -403,41 +421,63 @@ class MeasureNoteModel(MeasureHierarchyModel):
       raise NotImplementedError
 
   def _prepare_inference(self, vocab, header, manual_seed):
-    selected_token, last_hidden, last_measure_out, last_measure_hidden, total_out = super()._prepare_inference(vocab, header, manual_seed)
+    start_token, last_hidden, last_measure_out, last_measure_hidden = super()._prepare_inference(vocab, header, manual_seed)
     last_final_hidden = torch.zeros([self.final_rnn.num_layers, 1, self.final_rnn.hidden_size]).to(self.device)
-    return selected_token, last_hidden, last_measure_out, last_measure_hidden, last_final_hidden, total_out
+    return start_token, last_hidden, last_measure_out, last_measure_hidden, last_final_hidden
   
   def _inference_one_step(self, *args, **kwargs):
-    selected_token, last_hidden, last_measure_out, last_final_hidden, vocab = args
-    emb = self._get_embedding(selected_token.unsqueeze(0))
-    hidden, last_hidden = self.rnn(emb, last_hidden)
+    curr_token, last_hidden, last_measure_out, last_final_hidden, vocab = args
+    emb = self._get_embedding(curr_token.unsqueeze(0))
+    hidden, last_hidden = self.rnn(emb, last_hidden) # emb : [batch_size,seq_len,embedding_size] / last_hidden : [rnn_num_layers, batch_size, hidden_size]
     cat_hidden = torch.cat([hidden, last_measure_out], dim=-1)
     final_hidden, last_final_hidden = self.final_rnn(cat_hidden, last_final_hidden)
     logit = self.proj(final_hidden)
     prob = self._apply_softmax(logit)
-    selected_token = self._sample_by_token_type(prob.squeeze(), vocab)
-    return selected_token, last_hidden, last_final_hidden
+    curr_token = self._sample_by_token_type(prob.squeeze(), vocab)
+    return curr_token, last_hidden, last_final_hidden
 
   def inference(self, vocab, manual_seed=0, header=None):
-    total_hidden = []
+    """
+    This method runs the inference process, sampling notes and measures step-by-step using the GRU-based model. 
+    It integrates global conditions, measure information, and note information from previous steps to iteratively 
+    produce the final output sequence.
+
+    Args:
+        vocab (dict): Vocabulary containing the mapping of tokens to their corresponding indices.
+        manual_seed (int, optional): Random seed for controlling the reproducibility of the sampling process. Default is 0.
+        header (dict, optional): Dictionary containing global metadata such as rhythm, key, and etc.
+
+    Returns:
+        torch.Tensor: The concatenated tensor of generated note tokens.
+
+    Notes:
+        - The inference process maintains several key components throughout:
+            - `last_measure_out`: Initially set to `torch.zeros` until all notes for the first measure are generated.
+            - `last_measure_hidden`: Not updated until all notes for the current measure are generated.
+            - `start_token`: A concatenated tensor of note-specific components:
+                - `start_token[:4]`: [[pitch_idx, dur_idx, pitch_class_idx, octave_idx]]
+                - `start_token[4:9]`: [[m_idx, m_idx_mod4, m_offset, is_onbeat, is_middle_beat]]
+            - `global_condition`: Metadata that includes [key, meter, unit_length, rhythm, root, mode, key_sig, numer, denom, is_compound, is_triple].
+            - `curr_token`: Tensor shape of [1,20], contains musical information of a note.
+  """
+    total_hidden, total_out = [], []
     with torch.inference_mode():
       header, global_condition = self.prepare_global_info(vocab, header)
       measure_sampler = MeasureSampler(vocab, header)
-
-      selected_token, last_hidden, last_measure_out, last_measure_hidden, last_final_hidden, total_out = self._prepare_inference(vocab, header, manual_seed)
-      selected_token = torch.cat([selected_token, global_condition], dim=-1)
+      start_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden = self._prepare_inference(vocab, header, manual_seed)
+      curr_token = torch.cat([start_token, global_condition], dim=-1)
 
       prev_measure_num = 0
 
       while True:
-        selected_token, last_hidden, last_final_hidden = self._inference_one_step(selected_token, last_hidden, last_measure_out, last_final_hidden, vocab )
-        total_hidden.append(last_hidden[-1])
+        note_token, last_note_hidden, last_final_hidden = self._inference_one_step(curr_token, last_note_hidden, last_measure_out, last_final_hidden, vocab)
+        total_hidden.append(last_note_hidden[-1])
 
-        if selected_token[0,0] == 2: # Generated End token
-          break 
-        total_out.append(selected_token)
+        if note_token[0,0] == 2: # Generated End token
+          break
+        total_out.append(note_token)
 
-        measure_sampler.update(selected_token)
+        measure_sampler.update(note_token)
         if header['rhythm'] == 'reel':
           if measure_sampler.cur_m_offset == 4.0:
             total_out.append(torch.tensor([[0, 0, 0, 0]]).to(self.device))
@@ -447,7 +487,7 @@ class MeasureNoteModel(MeasureHierarchyModel):
           total_hidden = []
         
         measure_token = measure_sampler.get_measure_info_tensor().to(self.device)
-        selected_token = torch.cat([selected_token, measure_token, global_condition], dim=-1)
+        curr_token = torch.cat([note_token, measure_token, global_condition], dim=-1)
 
     return torch.cat(total_out, dim=0)
 
@@ -478,16 +518,16 @@ class MeasureNotePitchFirstModel(MeasureNoteModel):
       return torch.cat([emb[:, 1: :self.emb.layers[0].embedding_dim], end_vec.expand(emb.shape[0], 1, -1) ], dim=-1)
 
   def _inference_one_step(self, *args, **kwargs):
-    selected_token, last_hidden, last_measure_out, last_final_hidden, vocab = args
-    emb = self._get_embedding(selected_token.unsqueeze(0))
+    curr_token, last_hidden, last_measure_out, last_final_hidden, vocab = args
+    emb = self._get_embedding(curr_token.unsqueeze(0))
     hidden, last_hidden = self.rnn(emb, last_hidden)
     cat_hidden = torch.cat([hidden, last_measure_out], dim=-1)
     final_hidden, last_final_hidden = self.final_rnn(cat_hidden, last_final_hidden)
     main_token, dur_token = self.proj(final_hidden, self.emb.layers[0], vocab.pitch_range)
 
     converted_out = vocab.convert_inference_token(main_token, dur_token)
-    selected_token = torch.tensor(converted_out, dtype=torch.long).to(emb.device).unsqueeze(0)
-    return selected_token, last_hidden, last_final_hidden
+    curr_token = torch.tensor(converted_out, dtype=torch.long).to(emb.device).unsqueeze(0)
+    return curr_token, last_hidden, last_final_hidden
 
   def forward(self, input_seq, measure_numbers):
     '''
@@ -535,8 +575,8 @@ class MeasureSampler:
 
     return torch.tensor([self.vocab.encode_m_idx(idx) + self.vocab.encode_m_offset(offset, self.header)], dtype=torch.long)
 
-  def update(self, selected_token):
-    sampled_token_str = self.vocab.vocab['main'][selected_token[0,0].item()]
+  def update(self, curr_token):
+    sampled_token_str = self.vocab.vocab['main'][curr_token[0,0].item()]
     if '|' in sampled_token_str:
       if self.cur_m_offset > self.full_measure_duration / 2:
         self.cur_m_index += 1
@@ -551,7 +591,7 @@ class MeasureSampler:
     elif '(3' in sampled_token_str: #TODO: Solve it with regex
       self.tuplet_count = int(sampled_token_str.replace('(', ''))
     elif 'pitch' in sampled_token_str:
-      sampled_dur = float(self.vocab.vocab['dur'][selected_token[0,1].item()].replace('dur', ''))
+      sampled_dur = float(self.vocab.vocab['dur'][curr_token[0,1].item()].replace('dur', ''))
       if self.tuplet_count == 0:
         if self.tuplet_duration:
           self.cur_m_offset += self.tuplet_duration * 2
