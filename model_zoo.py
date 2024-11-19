@@ -311,6 +311,10 @@ class MeasureHierarchyModel(MeasureInfoModel):
 
     return curr_token, last_hidden
 
+  def _prepare_start_token(self, vocab, header):
+    out = vocab.prepare_start_token(header)
+    return torch.LongTensor([out]).to(self.device)
+  
   def _prepare_inference(self, vocab, header, manual_seed):
     start_token = self._prepare_start_token(vocab, header) # 주어진 header에 따른 시작 토큰 생성
     last_hidden = torch.zeros([self.rnn.num_layers, 1, self.rnn.hidden_size]).to(self.device)
