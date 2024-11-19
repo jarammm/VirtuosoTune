@@ -42,7 +42,7 @@ class Trainer:
     self.validation_loss = []
     self.validation_acc = []
 
-    self.make_log = not args.no_log
+    self.make_log = False
 
 
     if isinstance(self.train_loader.dataset, torch.utils.data.dataset.Subset):

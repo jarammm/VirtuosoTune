@@ -34,8 +34,8 @@ def get_argument_parser():
   parser.add_argument('--num_workers', type=int, default=2)
   parser.add_argument('--device', type=str, default='cpu')
 
-  parser.add_argument('--num_epoch_per_log', type=int, default=2)
-  parser.add_argument('--num_iter_per_valid', type=int, default=5000)
+  parser.add_argument('--num_epoch_per_log', type=int, default=1)
+  parser.add_argument('--num_iter_per_valid', type=int, default=5)
 
   parser.add_argument('--model_type', type=str, default='pitch_dur')
   parser.add_argument('--save_dir', type=Path, default=Path('experiments/'))
@@ -117,11 +117,5 @@ if __name__ == '__main__':
     trainer = TrainerMeasure(model, optimizer, scheduler, loss_fn, train_loader, valid_loader, args)
   else:
     trainer = Trainer(model, optimizer, scheduler, loss_fn, train_loader, valid_loader, args)
-  
-
-  if not args.no_log:
-    wandb.init(project="irish-maler", entity="maler", config={**vars(args), **config})
-    # wandb.config.update({**vars(args), **config})
-    wandb.watch(model)
 
   trainer.train_by_num_iter(args.num_iter)
