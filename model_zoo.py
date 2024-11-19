@@ -187,9 +187,9 @@ class MeasureInfoModel(PitchDurModel):
     offset = 'm_offset:' + str(offset)
     return torch.LongTensor([[vocab.tok2idx['m_idx'][idx], vocab.tok2idx['m_offset'][offset]]]).to(self.device)
 
-  def _prepare_start_token(self, vocab, header):
+  def _prepare_start_token(self, vocab):
     # <start>, <pad>, <m_idx:0>, <m_offset:0>
-    out = vocab.prepare_start_token(header)
+    out = vocab.prepare_start_token()
     return torch.LongTensor([out]).to(self.device)
 
   def _inference_one_step(self, *args, **kwargs):
@@ -207,7 +207,7 @@ class MeasureInfoModel(PitchDurModel):
     with torch.inference_mode():
       header, global_condition = self.prepare_global_info(vocab, header)
       measure_sampler = MeasureSampler(vocab, header)
-      start_token, last_hidden, total_out = self._prepare_inference(vocab, manual_seed)
+      start_token, last_hidden, total_out = self._prepare_inference(vocab, header, manual_seed)
       curr_token = torch.cat([start_token, global_condition], dim=-1)
 
       while True:

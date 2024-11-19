@@ -137,7 +137,7 @@ class TokenVocab:
 
     return default_header
 
-  def prepare_start_token(self, header):
+  def prepare_start_token(self):
     start_token_idx = self.tok2idx['main']['<start>']
     dur_token_idx =  self.tok2idx['dur']['<pad>']
     m_idx = self.tok2idx['m_idx']['m_idx:0']
