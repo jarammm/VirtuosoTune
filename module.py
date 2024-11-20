@@ -34,7 +34,7 @@ class MeasureGRU(nn.Module):
     self.attention = ContextAttention(input_size, num_head=num_head)
     self.measure_rnn = nn.GRU(input_size, hidden_size, num_layers=num_layers, batch_first=True, dropout=dropout)
 
-  def forward(self, x, measure_numbers):
+  def forward(self, x, measure_numbers): # x : [3762, 512], measure_numbers [3762]
     """
       Forward pass for processing sequences at the measure level.
 
@@ -47,11 +47,11 @@ class MeasureGRU(nn.Module):
       Returns:
           packed_out (PackedSequence): Processed sequence at the note level, after measure-level aggregation.
       """
-    if isinstance(x, PackedSequence):
+    if isinstance(x, PackedSequence): # padded_x [32, 192, 512], padded_measure_numbers [32, 192], self.attention : ContextAttention
       padded_x, batch_lens = pad_packed_sequence(x, batch_first=True)
       padded_measure_numbers, _ = pad_packed_sequence(measure_numbers, batch_first=True)
-      measure_nodes = make_higher_node(padded_x, self.attention, padded_measure_numbers)
-      out, _ = self.measure_rnn(measure_nodes)
+      measure_nodes = make_higher_node(padded_x, self.attention, padded_measure_numbers) # *6) measure_nodes : [32, 34, 512]
+      out, _ = self.measure_rnn(measure_nodes) # *12) out : [32, 34, 512]
       span_out = span_measure_to_note_num(out, padded_measure_numbers)
       packed_out =  pack_padded_sequence(span_out, batch_lens, batch_first=True, enforce_sorted=False)
       assert (packed_out.sorted_indices == x.sorted_indices).all()
@@ -96,12 +96,12 @@ class ContextAttention(nn.Module):
         self.context_vector = torch.nn.Parameter(torch.Tensor(num_head, self.head_size, 1))
         nn.init.uniform_(self.context_vector, a=-1, b=1)
 
-    def get_attention(self, x):
-        attention = self.attention_net(x)
-        attention_tanh = torch.tanh(attention)
-        attention_split = torch.stack(attention_tanh.split(split_size=self.head_size, dim=2), dim=0)
-        similarity = torch.bmm(attention_split.view(self.num_head, -1, self.head_size), self.context_vector)
-        similarity = similarity.view(self.num_head, x.shape[0], -1).permute(1,2,0)
+    def get_attention(self, x): # x [32, 192, 512] # *8)
+        attention = self.attention_net(x) # linear : [32, 192, 512]
+        attention_tanh = torch.tanh(attention) # activation : [32, 192, 512]
+        attention_split = torch.stack(attention_tanh.split(split_size=self.head_size, dim=2), dim=0) # split for mha : [8, 32, 192, 64]
+        similarity = torch.bmm(attention_split.view(self.num_head, -1, self.head_size), self.context_vector) # attention score : [8, 6144, 1]
+        similarity = similarity.view(self.num_head, x.shape[0], -1).permute(1,2,0) # [32, 192, 8]
         return similarity
 
     def forward(self, x):

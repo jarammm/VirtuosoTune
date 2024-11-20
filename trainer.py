@@ -302,7 +302,7 @@ class TrainerMeasure(TrainerPitchDur):
             - pred (PackedSequence): The model's predictions for the batch, shape of [total_seq_len, vocab size of main + dur].
             - loss_dict (Dict[float]): A dictionary containing the breakdown of the losses, [main, dur, total]
     """
-    melody, shifted_melody, measure_numbers = batch
+    melody, shifted_melody, measure_numbers = batch # *1) melody: [3762, 20] / shifted_melody: [3762, 20] / measure_numbers: [3762]
     pred = self.model(melody.to(self.device), measure_numbers)
 
     main_loss = self.loss_fn(pred.data[:, :self.model.vocab_size[0]], shifted_melody.data[:,0])

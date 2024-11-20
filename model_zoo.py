@@ -97,13 +97,13 @@ class PitchDurModel(LanguageModel):
   def _make_projection_layer(self):
     self.proj = nn.Linear(self.hidden_size, self.vocab_size[0] + self.vocab_size[1])
 
-  def _get_embedding(self, input_seq):
+  def _get_embedding(self, input_seq): # input_seq(=melody): [3762, 20]
     if isinstance(input_seq, PackedSequence):
       emb = PackedSequence(self.emb(input_seq[0]), input_seq[1], input_seq[2], input_seq[3])
     else:
       assert input_seq.ndim == 3
       emb = self.emb(input_seq)
-    return emb
+    return emb # [3762, 2624]
   
   def _apply_softmax(self, logit):
     prob = logit[:, :self.vocab_size[0]].softmax(dim=-1)
@@ -249,7 +249,7 @@ class MultiEmbedding(nn.Module):
         self.layers.append(nn.Embedding(vocab_size, embedding_size))
     self.layers = nn.ModuleList(self.layers)
 
-  def forward(self, x):
+  def forward(self, x): # x : [3762, 20]
     """
     Forward pass for the MultiEmbedding layer.
 
@@ -261,7 +261,7 @@ class MultiEmbedding(nn.Module):
         torch.Tensor: Concatenated embeddings of shape `[total_seq_len, total_embedding_size]`,
         where `total_embedding_size` is the sum of all individual embedding sizes.
     """
-    return torch.cat([module(x[..., i]) for i, module in enumerate(self.layers)], dim=-1)
+    return torch.cat([module(x[..., i]) for i, module in enumerate(self.layers)], dim=-1) # *2) i번째 임베딩 레이어에 모든 데이터의 i번째 값을 주어 정해진 output size의 임베딩 벡티를 생성, 옆으로 concat하여 (sum_seq_len, 2624)크기의 임베딩 벡터 리턴
 
   def get_embedding_size(self, vocab_sizes, vocab_param):
     embedding_sizes = [getattr(vocab_param, vocab_key) for vocab_key in vocab_sizes.keys()]
@@ -410,11 +410,11 @@ class MeasureNoteModel(MeasureHierarchyModel):
             Has a shape of [total_seq_len, number of main + dur classes].
     """
     if isinstance(input_seq, PackedSequence):
-      emb = self._get_embedding(input_seq)
-      note_hidden, _ = self.rnn(emb)
-      measure_hidden = self.measure_rnn(note_hidden, measure_numbers)
+      emb = self._get_embedding(input_seq) # *3) input_seq(=melody): [3762, 20] / emb [3762, 2624]
+      note_hidden, _ = self.rnn(emb) # *4) note_hidden : [3762, 512]
+      measure_hidden = self.measure_rnn(note_hidden, measure_numbers) # *5) measure_number : [3762], measure_hidden : [3762, 512]
 
-      cat_hidden = PackedSequence(torch.cat([note_hidden.data, measure_hidden.data], dim=-1), note_hidden.batch_sizes, note_hidden.sorted_indices, note_hidden.unsorted_indices)
+      cat_hidden = PackedSequence(torch.cat([note_hidden.data, measure_hidden.data], dim=-1), note_hidden.batch_sizes, note_hidden.sorted_indices, note_hidden.unsorted_indices) # [3762, 1024]
       final_hidden, _ = self.final_rnn(cat_hidden)
 
       logit = self.proj(final_hidden.data)

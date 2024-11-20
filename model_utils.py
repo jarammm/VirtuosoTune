@@ -4,7 +4,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
 def find_boundaries(diff_boundary, measure_numbers, i):
-  """
+  """ # diff_boundary [565, 2], measure_numbers [32, 192], i (int)
   Finds the boundaries for a specific batch index where a new measure starts.
 
   Args:
@@ -16,7 +16,7 @@ def find_boundaries(diff_boundary, measure_numbers, i):
   Returns:
       out (List[int]): A list [start positions of a new measure in a batch],
           containing lists of positions indicating the start of a new measure for a given batch.
-  """
+  """ # out : 0, 새로운 마디가 시작되는 인덱스들, 마지막 마디 인덱스
   out = [0] + (diff_boundary[diff_boundary[:,0]==i][:,1]+1 ).tolist() + [torch.max(torch.nonzero(measure_numbers[i])).item()+1]
   if out[1] == 0: # if the first boundary occurs in 0, it will be duplicated
     out.pop(0)
@@ -24,7 +24,7 @@ def find_boundaries(diff_boundary, measure_numbers, i):
 
 
 def find_boundaries_batch(measure_numbers):
-  """
+  """ # measure_numbers : [32, 192]
   Identifies all measure boundaries for each batch.
 
   Args:
@@ -35,12 +35,12 @@ def find_boundaries_batch(measure_numbers):
       (List[List[int]]): A list contains `N`(batch size) lists [start positions of a new measure in each batch],
           where each inner list contains the start positions of new measure for each batch.
   """
-  diff_boundary = torch.nonzero(measure_numbers[:,1:] - measure_numbers[:,:-1]).cpu()
+  diff_boundary = torch.nonzero(measure_numbers[:,1:] - measure_numbers[:,:-1]).cpu() # *10) diff_boundary :[565,2] -> 각 element : [몇번째 배치, 해당 배치 내 새로운 마디가 시작되는 인덱스]
   return [find_boundaries(diff_boundary, measure_numbers, i) for i in range(len(measure_numbers))]
 
 
 def get_softmax_by_boundary(similarity, boundaries, fn=torch.softmax):
-  '''
+  ''' # similarity[batch_idx] : [192, 8], boundaries[batch_idx] : list(리스트 길이는 매 인덱스마다 다름)
   similarity = similarity of a single sequence of data (T x C)
   boundaries = list of a boundary index (T)
   '''
@@ -51,7 +51,7 @@ def get_softmax_by_boundary(similarity, boundaries, fn=torch.softmax):
 
 
 def make_higher_node(note_hidden, attention_weights, measure_numbers):
-    """
+    """ # note_hidden [32, 192, 512], attention_weights : ContextAttention, measure_numbers [32, 192]
     Prepares inputs for the measure-level GRU by aggregating note-level hidden states using `context attention`.
 
     This function processes note-level hidden vectors using attention weights and measure boundary information
@@ -76,16 +76,16 @@ def make_higher_node(note_hidden, attention_weights, measure_numbers):
         higher_nodes (torch.Tensor): 
             Measure-level input representations of shape `[batch_size, num_measures, hidden_size]`
     """
-    similarity = attention_weights.get_attention(note_hidden)
-    boundaries = find_boundaries_batch(measure_numbers)
+    similarity = attention_weights.get_attention(note_hidden) # *7) similarity : [32, 192, 8]
+    boundaries = find_boundaries_batch(measure_numbers) # *9) len(boundaries) : 32 / 각 배치마다 마디 수는 다르므로, boundaries 내 리스트들도 길이가 제각각
     softmax_similarity = torch.nn.utils.rnn.pad_sequence(
-      [torch.cat(get_softmax_by_boundary(similarity[batch_idx], boundaries[batch_idx]))
-        for batch_idx in range(len(note_hidden))], batch_first=True)
+      [torch.cat(get_softmax_by_boundary(similarity[batch_idx], boundaries[batch_idx])) # *11)
+        for batch_idx in range(len(note_hidden))], batch_first=True) # [32, 192, 8]
     
     if hasattr(attention_weights, 'head_size'):
-        x_split = torch.stack(note_hidden.split(split_size=attention_weights.head_size, dim=2), dim=2)
-        weighted_x = x_split * softmax_similarity.unsqueeze(-1).repeat(1,1,1, x_split.shape[-1])
-        weighted_x = weighted_x.view(x_split.shape[0], x_split.shape[1], note_hidden.shape[-1])
+        x_split = torch.stack(note_hidden.split(split_size=attention_weights.head_size, dim=2), dim=2) # [32, 192, 8, 64]
+        weighted_x = x_split * softmax_similarity.unsqueeze(-1).repeat(1,1,1, x_split.shape[-1]) # [32, 192, 8, 64] * [32, 192, 8, 64] = [32, 192, 8, 64]
+        weighted_x = weighted_x.view(x_split.shape[0], x_split.shape[1], note_hidden.shape[-1]) # [32, 192, 8, 64] -> [32, 192, 512]
         higher_nodes = torch.nn.utils.rnn.pad_sequence([
           torch.cat([torch.sum(weighted_x[i:i+1,boundaries[i][j-1]:boundaries[i][j],: ], dim=1) for j in range(1, len(boundaries[i]))], dim=0) \
           for i in range(len(note_hidden))], batch_first=True)
