@@ -85,7 +85,7 @@ def make_higher_node(note_hidden, attention_weights, measure_numbers):
     if hasattr(attention_weights, 'head_size'):
         x_split = torch.stack(note_hidden.split(split_size=attention_weights.head_size, dim=2), dim=2) # [32, 192, 8, 64]
         weighted_x = x_split * softmax_similarity.unsqueeze(-1).repeat(1,1,1, x_split.shape[-1]) # [32, 192, 8, 64] * [32, 192, 8, 64] = [32, 192, 8, 64]
-        weighted_x = weighted_x.view(x_split.shape[0], x_split.shape[1], note_hidden.shape[-1]) # [32, 192, 8, 64] -> [32, 192, 512]
+        weighted_x = weighted_x.view(x_split.shape[0], x_split.shape[1], note_hidden.shape[-1]) # [32, 192, 8, 64] -> [32, 192, 512] : 8*64 -> 512
         higher_nodes = torch.nn.utils.rnn.pad_sequence([
           torch.cat([torch.sum(weighted_x[i:i+1,boundaries[i][j-1]:boundaries[i][j],: ], dim=1) for j in range(1, len(boundaries[i]))], dim=0) \
           for i in range(len(note_hidden))], batch_first=True)
