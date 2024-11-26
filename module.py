@@ -57,7 +57,10 @@ class MeasureGRU(nn.Module):
       assert (packed_out.sorted_indices == x.sorted_indices).all()
       return packed_out
     else:
-      raise NotImplementedError
+      measure_nodes = make_higher_node(x, self.attention, measure_numbers)
+      out, _ = self.measure_rnn(measure_nodes)
+      span_out = span_measure_to_note_num(out, measure_numbers)
+      return span_out
 
   def one_step(self, x, hidden):
     node = self.attention(x)

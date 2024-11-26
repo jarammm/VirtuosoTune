@@ -35,7 +35,8 @@ class LanguageModel(nn.Module):
       emb = PackedSequence(self.emb(input_seq[0]), input_seq[1], input_seq[2], input_seq[3])
       return emb
     else:
-      pass
+      emb = self.emb(input_seq)
+      return emb
 
   def _apply_softmax(self, logit):
     return logit.softmax(dim=-1)
@@ -50,7 +51,10 @@ class LanguageModel(nn.Module):
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
 
     else:
-      pass
+      emb = self._get_embedding(input_seq)
+      hidden, _ = self.rnn(emb)
+      logit = self.proj(hidden)
+      prob = self._apply_softmax(logit)
 
     return prob
 
@@ -296,7 +300,13 @@ class MeasureHierarchyModel(MeasureInfoModel):
       prob = self._apply_softmax(logit)
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
     else:
-      pass
+      emb = self._get_embedding(input_seq)
+      note_hidden, _ = self.rnn(emb)
+      measure_hidden = self.measure_rnn(note_hidden, measure_numbers)
+      
+      cat_hidden = torch.cat([note_hidden, measure_hidden], dim=-1)
+      logit = self.proj(cat_hidden)
+      prob = self._apply_softmax(logit)
 
     return prob
 
@@ -420,9 +430,17 @@ class MeasureNoteModel(MeasureHierarchyModel):
       logit = self.proj(final_hidden.data)
       prob = self._apply_softmax(logit)
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
-      return prob
     else:
-      raise NotImplementedError
+      emb = self._get_embedding(input_seq)
+      note_hidden, _ = self.rnn(emb)
+      measure_hidden = self.measure_rnn(note_hidden, measure_numbers)
+      
+      cat_hidden = torch.cat([note_hidden, measure_hidden], dim=-1)
+      final_hidden, _ = self.final_rnn(cat_hidden)
+      logit = self.proj(final_hidden)
+      prob = self._apply_softmax(logit)
+      
+    return prob
 
   def _prepare_inference(self, vocab, header, manual_seed):
     start_token, last_hidden, last_measure_out, last_measure_hidden = super()._prepare_inference(vocab, header, manual_seed)
@@ -496,7 +514,6 @@ class MeasureNoteModel(MeasureHierarchyModel):
     return torch.cat(total_out, dim=0)
 
 
-
 class MeasureNotePitchFirstModel(MeasureNoteModel):
   def __init__(self, vocab_size, net_param):
     super().__init__(vocab_size, net_param)
@@ -551,9 +568,16 @@ class MeasureNotePitchFirstModel(MeasureNoteModel):
       logit = self.proj(final_hidden.data, pitch_vec.data) # output: [num_total_notes x vocab_size].
       prob = self._apply_softmax(logit)
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
-
     else:
-      pass
+      emb = self._get_embedding(input_seq)
+      hidden, _ = self.rnn(emb)
+      measure_hidden = self.measure_rnn(hidden, measure_numbers)
+      
+      cat_hidden = torch.cat([hidden, measure_hidden], dim=-1)
+      final_hidden, _ = self.final_rnn(cat_hidden)
+      pitch_vec = self.time_shifted_pitch_emb(emb)
+      logit = self.proj(final_hidden, pitch_vec)
+      prob = self._apply_softmax(logit)
 
     return prob
 
@@ -625,8 +649,10 @@ class MeasureGPT(MeasureInfoModel):
       logit = self.proj(hidden.data) # output: [num_total_notes x vocab_size].
       prob = self._apply_softmax(logit)
       prob = PackedSequence(prob, input_seq[1], input_seq[2], input_seq[3])
-
     else:
-      pass
+      emb = self._get_embedding(input_seq)
+      hidden, _ = self.rnn(emb)
+      logit = self.proj(hidden)
+      prob = self._apply_softmax(logit)
 
     return prob

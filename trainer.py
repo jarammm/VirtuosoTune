@@ -304,10 +304,18 @@ class TrainerMeasure(TrainerPitchDur):
     """
     melody, shifted_melody, measure_numbers = batch
     pred = self.model(melody.to(self.device), measure_numbers)
-
-    main_loss = self.loss_fn(pred.data[:, :self.model.vocab_size[0]], shifted_melody.data[:,0])
-    is_note = shifted_melody.data[:,1] > 2 # is not pad, start end tokens
-    dur_loss = self.loss_fn(pred.data[is_note, self.model.vocab_size[0]:], shifted_melody.data[is_note,1])
+    if isinstance(melody, PackedSequence):
+      main_loss = self.loss_fn(pred.data[:, :self.model.vocab_size[0]], shifted_melody.data[:,0])
+      is_note = shifted_melody.data[:,1] > 2 # is not pad, start end tokens
+      dur_loss = self.loss_fn(pred.data[is_note, self.model.vocab_size[0]:], shifted_melody.data[is_note,1])
+    else:
+      main_loss = self.loss_fn(pred[:, :, :self.model.vocab_size[0]].reshape(-1, self.model.vocab_size[0]),
+          shifted_melody[:, :, 0].reshape(-1).to(self.device))
+      is_note = shifted_melody[:, :, 1] > 2  # is_note는 padding이나 start/end가 아닌 경우만 선택
+      dur_loss = self.loss_fn(
+          pred[:, :, self.model.vocab_size[0]:].reshape(-1, pred.shape[-1] - self.model.vocab_size[0]),
+          shifted_melody[:, :, 1][is_note].reshape(-1).to(self.device)
+      )
     loss = main_loss + dur_loss
     loss_dict = {'main': main_loss.item(), 'dur': dur_loss.item(), 'total':loss.item()}
 
@@ -335,14 +343,19 @@ class TrainerMeasure(TrainerPitchDur):
     """
     melody, shifted_melody, _ = batch
     loss, pred, loss_dict = self.get_loss_pred_from_single_batch(batch)
-    num_tokens = melody.data.shape[0]
-
-    is_note = shifted_melody.data[:,1] > 2 # is not pad, start end tokens
-    main_acc = torch.sum(torch.argmax(pred.data[:, :self.model.vocab_size[0]], dim=-1) == shifted_melody.to(self.device).data[:,0])
-    dur_acc = torch.sum(torch.argmax(pred.data[is_note, self.model.vocab_size[0]:], dim=-1) == shifted_melody.to(self.device).data[is_note,1])
-
+    
+    if isinstance(melody, PackedSequence):
+      num_tokens = melody.data.shape[0]
+      is_note = shifted_melody.data[:,1] > 2 # is not pad, start end tokens
+      main_acc = torch.sum(torch.argmax(pred.data[:, :self.model.vocab_size[0]], dim=-1) == shifted_melody.to(self.device).data[:,0])
+      dur_acc = torch.sum(torch.argmax(pred.data[is_note, self.model.vocab_size[0]:], dim=-1) == shifted_melody.to(self.device).data[is_note,1])
+    else:
+      num_tokens = melody.shape[0] * melody.shape[1]  # 전체 토큰 수
+      is_note = shifted_melody[:, :, 1] > 2 # torch.Size([1, 152]) / bool
+      main_acc = torch.sum(torch.argmax(pred[:, :, :self.model.vocab_size[0]], dim=-1) == shifted_melody[:, :, 0].to(self.device))
+      dur_acc = torch.sum(torch.argmax(pred[:, :, self.model.vocab_size[0]:], dim=-1)[is_note] == shifted_melody[:, :, 1][is_note].to(self.device))
+    
     acc = main_acc  + dur_acc * is_note.sum() / num_tokens
-
     validation_loss = loss.item() * num_tokens
     num_total_tokens = num_tokens
     validation_acc = acc.item()

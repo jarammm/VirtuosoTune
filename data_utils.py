@@ -275,6 +275,37 @@ def pack_collate(raw_batch:list):
       raise ValueError("Unknown raw_batch format")
 
 
+def regular_collate(raw_batch: list):
+    '''
+    Collates a list of data by padding melodies, shifted melodies, and optionally measure numbers.
+    
+    Arguments:
+      raw_batch: A list of MelodyDataset[idx]. Each item in the list is a tuple of (melody, shifted_melody, [measure_numbers]).
+                 
+    Returns:
+      Tuple containing padded melodies, shifted melodies, and optionally measure numbers.
+    '''
+    
+    # Separate the batch into melodies, shifted melodies, and optional measure numbers
+    melodies, shifted_melodies, measure_numbers = zip(*[(*mel_pair, None) if len(mel_pair) == 2 else mel_pair for mel_pair in raw_batch])
+    
+    # Find maximum lengths for padding
+    max_len = lambda x: max([len(seq) for seq in x])
+    max_melody_len, max_shifted_len = max_len(melodies), max_len(shifted_melodies)
+    
+    # Pad the tensors
+    pad_tensor = lambda x, max_len: torch.stack([torch.cat([seq, torch.zeros(max_len - len(seq), *seq.shape[1:], dtype=torch.long)]) for seq in x])
+    padded_melodies = pad_tensor(melodies, max_melody_len)
+    padded_shifted_melodies = pad_tensor(shifted_melodies, max_shifted_len)
+    
+    # Pad measure numbers if they exist
+    if measure_numbers[0] is not None:
+        max_measure_len = max_len(measure_numbers)
+        padded_measure_numbers = pad_tensor(measure_numbers, max_measure_len)
+        return padded_melodies, padded_shifted_melodies, padded_measure_numbers
+    else:
+        return padded_melodies, padded_shifted_melodies
+
 
 class PitchDurSplitSet(ABCset):
   def __init__(self, dir_path, vocab_path=None, num_limit=None, make_vocab=True, key_aug=None, vocab_name='TokenVocab'):
