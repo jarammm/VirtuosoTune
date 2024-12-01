@@ -508,10 +508,66 @@ class MeasureNoteModel(MeasureHierarchyModel):
           prev_measure_num = measure_sampler.measure_number
           total_hidden = []
         
-        measure_token = measure_sampler.get_measure_info_tensor().to(self.device)
+        measure_token = measure_sampler.get_measure_info_tensor().to(self.device) # KeyError: 'm_offset:9.75'
         curr_token = torch.cat([note_token, measure_token, global_condition], dim=-1)
 
     return torch.cat(total_out, dim=0)
+  
+  def generate_header(self, key_mode, header, manual_seed):
+      if key_mode == 'random':
+          if manual_seed % 10 < 7:
+            header['key'] = 'C Major'
+          elif manual_seed % 3 == 0:
+            header['key'] = 'C minor'
+          elif manual_seed % 3 < 1:
+            header['key'] = 'C Dorian'
+          else:
+            header['key'] = 'C Mixolydian'
+      return header
+  
+  def outer_inference(self, vocab, key_mode, header, manual_seed):
+    header = self.generate_header(key_mode, header, manual_seed)
+    header, global_condition = self.prepare_global_info(vocab, header)
+    start_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden = self._prepare_inference(vocab, header, manual_seed)
+    curr_token = torch.cat([start_token, global_condition], dim=-1)
+    return header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden
+  
+  def inner_inference(self, vocab, header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden):
+    self.measure_sampler = MeasureSampler(vocab, header)
+    prev_measure_num = 0
+    total_hidden, total_out = [], []
+    while len(total_out) < 3:
+      note_token, last_note_hidden, last_final_hidden = self._inference_one_step(curr_token, last_note_hidden, last_measure_out, last_final_hidden, vocab)
+      total_hidden.append(last_note_hidden[-1])
+
+      if note_token[0,0] == 2: # Generated End token
+        break
+      total_out.append(note_token)
+
+      self.measure_sampler.update(note_token)
+      if header['rhythm'] == 'reel':
+        if self.measure_sampler.cur_m_offset == 4.0:
+          total_out.append(torch.tensor([[0, 0, 0, 0]]).to(self.device))
+      if self.measure_sampler.measure_number != prev_measure_num:
+        last_measure_out, last_measure_hidden = self.measure_rnn.one_step(torch.cat(total_hidden, dim=0).unsqueeze(0), last_measure_hidden)
+        prev_measure_num = self.measure_sampler.measure_number
+        total_hidden = []
+      
+      measure_token = self.measure_sampler.get_measure_info_tensor().to(self.device)
+      curr_token = torch.cat([note_token, measure_token, global_condition], dim=-1)
+
+    return torch.cat(total_out, dim=0)
+    
+    
+  def inference_onnx(self, vocab, key_mode, header, manual_seed=0):
+    while True:
+      try:
+        header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden = self.outer_inference(vocab, key_mode, header, manual_seed.item())
+        out = self.inner_inference(vocab, header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden)
+        return out, manual_seed
+      except Exception as e:
+        print(f"decoding failed: {e}")
+      manual_seed += 1
 
 
 class MeasureNotePitchFirstModel(MeasureNoteModel):
