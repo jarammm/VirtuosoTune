@@ -39,16 +39,6 @@ def inference(args):
   num_generated = 0
   rand_seed = args.seed
   while num_generated < args.num_samples:
-    if args.key_mode == 'random':
-      if rand_seed % 10 < 7:
-        header['key'] = 'C Major'
-      elif rand_seed % 3 == 0:
-        header['key'] = 'C minor'
-      elif rand_seed % 3 < 1:
-        header['key'] = 'C Dorian'
-      else:
-        header['key'] = 'C Mixolydian'
-
     try:
       inputs = {session.get_inputs()[0].name: np.array(rand_seed, dtype=np.int32)}
       out, rand_seed = session.run(None, inputs)

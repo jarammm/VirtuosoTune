@@ -525,17 +525,15 @@ class MeasureNoteModel(MeasureHierarchyModel):
             header['key'] = 'C Mixolydian'
       return header
   
-  def outer_inference(self, vocab, key_mode, header, manual_seed):
+  def full_inference(self, vocab, key_mode, header, manual_seed):
     header = self.generate_header(key_mode, header, manual_seed)
     header, global_condition = self.prepare_global_info(vocab, header)
     start_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden = self._prepare_inference(vocab, header, manual_seed)
     curr_token = torch.cat([start_token, global_condition], dim=-1)
-    return header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden
-  
-  def inner_inference(self, vocab, header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden):
     self.measure_sampler = MeasureSampler(vocab, header)
     prev_measure_num = 0
     total_hidden, total_out = [], []
+    
     while len(total_out) < 3:
       note_token, last_note_hidden, last_final_hidden = self._inference_one_step(curr_token, last_note_hidden, last_measure_out, last_final_hidden, vocab)
       total_hidden.append(last_note_hidden[-1])
@@ -562,8 +560,7 @@ class MeasureNoteModel(MeasureHierarchyModel):
   def inference_onnx(self, vocab, key_mode, header, manual_seed=0):
     while True:
       try:
-        header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden = self.outer_inference(vocab, key_mode, header, manual_seed.item())
-        out = self.inner_inference(vocab, header, global_condition, curr_token, last_note_hidden, last_measure_out, last_measure_hidden, last_final_hidden)
+        out = self.full_inference(vocab, key_mode, header, manual_seed.item())
         return out, manual_seed
       except Exception as e:
         print(f"decoding failed: {e}")
