@@ -23,7 +23,7 @@ class InferenceWrapper(nn.Module):
         """
         Wrap the inference function for ONNX export.
         """
-        return self.model.inference(self.vocab, seed, self.header)
+        return self.model.inference(self.vocab, seed.item(), self.header)
 
 
 def export_to_onnx(model, vocab, save_path, device="cpu"):
@@ -43,7 +43,7 @@ def export_to_onnx(model, vocab, save_path, device="cpu"):
         save_path,  # Path to save the ONNX file
         input_names=["manual_seed"],  # Names for input tensors
         output_names=["generated_notes"],  # Name for output tensor
-        opset_version=12  # ONNX opset version
+        opset_version=17  # ONNX opset version
     )
     print(f"Model exported to {save_path}")
 
@@ -81,7 +81,7 @@ def prepare_model_for_export(path: Path, device: str, pretrained=False):
 
 # 경로 설정 및 모델 변환 실행
 experiment_path = Path("experiments/20241126-163657-MeasureNoteModel_512_32_100000_0.0003")
-onnx_save_path = "MeasureInfoModel.onnx"
+onnx_save_path = "MeasureNoteModel.onnx"
 device = "cpu"
 
 # 모델 준비
